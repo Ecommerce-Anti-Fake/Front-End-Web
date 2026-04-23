@@ -1,5 +1,6 @@
 export const navigationItems = [
   { to: '/', label: 'Dashboard' },
+  { to: '/cart', label: 'Cart' },
   { to: '/user', label: 'User' },
   { to: '/shops', label: 'Shops' },
   { to: '/products', label: 'Products' },

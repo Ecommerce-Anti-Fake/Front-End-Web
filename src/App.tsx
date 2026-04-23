@@ -4,8 +4,10 @@ import { ProtectedRoute } from './components/protected-route';
 import { AdminPage } from './pages/admin-page';
 import { AffiliatePage } from './pages/affiliate-page';
 import { AuthPage } from './pages/auth-page';
+import { CartPage } from './pages/cart-page';
 import { DashboardPage } from './pages/dashboard-page';
 import { DistributionPage } from './pages/distribution-page';
+import { OfferDetailPage } from './pages/offer-detail-page';
 import { OrdersPage } from './pages/orders-page';
 import { ProductsPage } from './pages/products-page';
 import { ShopsPage } from './pages/shops-page';
@@ -24,9 +26,11 @@ export function App() {
         }
       >
         <Route index element={<DashboardPage />} />
+        <Route path="cart" element={<CartPage />} />
         <Route path="user" element={<UserPage />} />
         <Route path="shops" element={<ShopsPage />} />
         <Route path="products" element={<ProductsPage />} />
+        <Route path="products/:offerId" element={<OfferDetailPage />} />
         <Route path="distribution" element={<DistributionPage />} />
         <Route path="orders" element={<OrdersPage />} />
         <Route path="affiliate" element={<AffiliatePage />} />
