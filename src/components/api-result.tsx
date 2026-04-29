@@ -9,7 +9,7 @@ type ApiResultProps = {
 
 export function ApiResult({ title, loading, error, data }: ApiResultProps) {
   if (loading) {
-    return <div className="empty-state">Dang tai {title.toLowerCase()}...</div>;
+    return <div className="empty-state">Đang tải {title.toLowerCase()}...</div>;
   }
 
   if (error) {
@@ -17,7 +17,7 @@ export function ApiResult({ title, loading, error, data }: ApiResultProps) {
   }
 
   if (!data) {
-    return <div className="empty-state">Chua co du lieu.</div>;
+    return <div className="empty-state">Chưa có dữ liệu.</div>;
   }
 
   return <JsonPanel title={title} data={data} />;

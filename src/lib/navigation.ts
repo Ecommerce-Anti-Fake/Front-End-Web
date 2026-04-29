@@ -1,11 +1,6 @@
 export const navigationItems = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/cart', label: 'Cart' },
-  { to: '/user', label: 'User' },
-  { to: '/shops', label: 'Shops' },
-  { to: '/products', label: 'Products' },
-  { to: '/distribution', label: 'Distribution' },
-  { to: '/orders', label: 'Orders' },
-  { to: '/affiliate', label: 'Affiliate' },
-  { to: '/admin', label: 'Admin' },
+  { to: '/', label: 'Trang chủ' },
+  { to: '/products', label: 'Sản phẩm' },
+  { to: '/orders', label: 'Đơn hàng' },
+  { to: '/cart', label: 'Giỏ hàng' },
 ];

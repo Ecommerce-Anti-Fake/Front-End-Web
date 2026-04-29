@@ -1,418 +1,447 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { ApiResult } from '../components/api-result';
-import { KeyValueList } from '../components/key-value-list';
-import { PageSection } from '../components/page-section';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { BreadcrumbNav } from '../components/breadcrumb-nav';
 import { useApiQuery } from '../hooks/use-api-query';
-import { apiRequest } from '../lib/api-client';
-import { useAuth } from '../modules/auth/auth-context';
 
-const ACTIVE_SHOP_KEY = 'eaf-active-shop-id';
-const ACTIVE_OFFER_KEY = 'eaf-active-offer-id';
-
-const initialRetailForm = {
-  offerId: '',
-  quantity: 1,
-  affiliateCode: '',
-};
-
-const initialWholesaleForm = {
-  buyerShopId: '',
-  buyerDistributionNodeId: '',
-  offerId: '',
-  quantity: 1,
-  affiliateCode: '',
-};
-
-type OrderSnapshot = {
-  id?: string;
-  orderType?: string;
-  orderStatus?: string;
-  paymentStatus?: string;
-  totalAmount?: number | string;
-  quantity?: number | string;
+type OrderItemRecord = {
   offerId?: string;
-  buyerShopId?: string;
+  offerTitleSnapshot?: string;
+  unitPrice?: number | string;
+  quantity?: number | string;
+  verificationLevelSnapshot?: string;
+};
+
+type OrderRecord = {
+  id?: string;
+  orderMode?: string;
+  orderStatus?: string;
+  paymentStatus?: string | null;
+  paymentMethod?: string | null;
+  paymentProviderRef?: string | null;
+  escrowStatus?: string | null;
   sellerShopId?: string;
-  [key: string]: unknown;
+  sellerShopName?: string;
+  buyerShopId?: string | null;
+  buyerPayableAmount?: number | string;
+  sellerReceivableAmount?: number | string;
+  totalAmount?: number | string;
+  items?: OrderItemRecord[];
+  createdAt?: string;
+  updatedAt?: string;
 };
 
-type MembershipRecord = {
-  nodeId?: string;
-  networkId?: string;
-  networkName?: string;
-  manufacturerShopName?: string;
-  shopId?: string;
-  shopName?: string;
-  level?: number;
-  relationshipStatus?: string;
-  [key: string]: unknown;
+type TimelineStep = {
+  key: string;
+  label: string;
+  helper: string;
+  done: boolean;
+  current: boolean;
 };
 
-function normalizeList<T>(data: unknown, keys: string[]): T[] {
-  if (Array.isArray(data)) {
-    return data as T[];
-  }
-
-  if (data && typeof data === 'object') {
-    for (const key of keys) {
-      const value = (data as Record<string, unknown>)[key];
-      if (Array.isArray(value)) {
-        return value as T[];
-      }
-    }
-  }
-
-  return [];
+function toNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function summarizeOrder(order: unknown): OrderSnapshot | null {
-  if (!order || typeof order !== 'object') {
-    return null;
+function formatMoney(value: unknown, currency = 'VND') {
+  return `${toNumber(value).toLocaleString('vi-VN')} ${currency}`;
+}
+
+function formatDate(value?: string) {
+  if (!value) {
+    return '-';
   }
 
-  return order as OrderSnapshot;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString('vi-VN');
+}
+
+function normalizeList(data: unknown) {
+  return Array.isArray(data) ? (data as OrderRecord[]) : [];
+}
+
+function statusLabel(value?: string | null) {
+  const normalized = String(value || '').toLowerCase();
+  const labels: Record<string, string> = {
+    pending: 'Chờ xác nhận',
+    paid: 'Đã thanh toán',
+    completed: 'Hoàn tất',
+    cancelled: 'Đã hủy',
+    refunded: 'Đã hoàn tiền',
+    held: 'Đang giữ tiền',
+    released: 'Đã giải ngân',
+  };
+
+  return labels[normalized] || value || '-';
+}
+
+function paymentMethodLabel(value?: string | null) {
+  if (value === 'COD') {
+    return 'Thanh toán khi nhận hàng';
+  }
+
+  if (value === 'BANK_TRANSFER') {
+    return 'Chuyển khoản';
+  }
+
+  return value || 'Chưa chọn';
+}
+
+function orderStatusTone(value?: string | null) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'completed' || normalized === 'paid') {
+    return 'success';
+  }
+  if (normalized === 'cancelled' || normalized === 'refunded') {
+    return 'danger';
+  }
+  return 'active';
 }
 
 export function OrdersPage() {
-  const { session } = useAuth();
-  const [searchParams] = useSearchParams();
-  const memberships = useApiQuery('/distribution/my-memberships');
-  const [retailForm, setRetailForm] = useState(initialRetailForm);
-  const [wholesaleForm, setWholesaleForm] = useState(initialWholesaleForm);
-  const [lookupId, setLookupId] = useState('');
-  const [lookupResult, setLookupResult] = useState<unknown>(null);
-  const [lookupError, setLookupError] = useState<string | null>(null);
-  const [lookupLoading, setLookupLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [createdOrder, setCreatedOrder] = useState<OrderSnapshot | null>(null);
+  const navigate = useNavigate();
+  const { orderId: routeOrderId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const ordersQuery = useApiQuery<OrderRecord[]>('/orders/mine');
+  const [selectedOrderId, setSelectedOrderId] = useState(() => routeOrderId || searchParams.get('orderId') || '');
 
-  const activeShopId = window.localStorage.getItem(ACTIVE_SHOP_KEY) || '';
-  const activeOfferId = window.localStorage.getItem(ACTIVE_OFFER_KEY) || '';
-  const checkoutOfferId = searchParams.get('offerId') || '';
-  const checkoutQuantity = Number(searchParams.get('quantity') || '');
-  const checkoutCartItemId = searchParams.get('cartItemId') || '';
-
-  const membershipList = useMemo(
-    () => normalizeList<MembershipRecord>(memberships.data, ['items', 'data', 'memberships']),
-    [memberships.data],
-  );
-  const matchingMemberships = useMemo(
-    () =>
-      membershipList.filter(
-        (membership) =>
-          String(membership.shopId || '') === wholesaleForm.buyerShopId &&
-          String(membership.relationshipStatus || '').toUpperCase() === 'ACTIVE',
-      ),
-    [membershipList, wholesaleForm.buyerShopId],
-  );
+  const orderList = useMemo(() => normalizeList(ordersQuery.data), [ordersQuery.data]);
 
   useEffect(() => {
-    setRetailForm((prev) => ({
-      ...prev,
-      offerId: checkoutOfferId || prev.offerId || activeOfferId,
-      quantity:
-        Number.isFinite(checkoutQuantity) && checkoutQuantity > 0
-          ? checkoutQuantity
-          : prev.quantity,
-    }));
-
-    setWholesaleForm((prev) => ({
-      ...prev,
-      buyerShopId: prev.buyerShopId || activeShopId,
-      offerId: prev.offerId || activeOfferId,
-    }));
-  }, [activeOfferId, activeShopId, checkoutOfferId, checkoutQuantity]);
-
-  useEffect(() => {
-    if (!matchingMemberships.length) {
+    if (!orderList.length) {
       return;
     }
 
-    const currentNodeStillValid = matchingMemberships.some(
-      (membership) => String(membership.nodeId || '') === wholesaleForm.buyerDistributionNodeId,
-    );
+    const orderIdFromQuery = routeOrderId || searchParams.get('orderId') || '';
+    const targetOrderId = orderIdFromQuery || selectedOrderId;
+    const hasTarget = targetOrderId && orderList.some((order) => String(order.id || '') === targetOrderId);
 
-    if (currentNodeStillValid) {
-      return;
-    }
-
-    setWholesaleForm((prev) => ({
-      ...prev,
-      buyerDistributionNodeId: String(matchingMemberships[0].nodeId || ''),
-    }));
-  }, [matchingMemberships, wholesaleForm.buyerDistributionNodeId]);
-
-  async function createRetailOrder(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage(null);
-
-    try {
-      const response = await apiRequest<OrderSnapshot>('/orders/retail', {
-        method: 'POST',
-        accessToken: session?.accessToken,
-        body: {
-          offerId: retailForm.offerId,
-          quantity: retailForm.quantity,
-          affiliateCode: retailForm.affiliateCode || null,
-        },
-      });
-
-      setCreatedOrder(summarizeOrder(response));
-      setLookupResult(response);
-      setMessage('Tao retail order thanh cong.');
-      if (checkoutCartItemId) {
-        try {
-          await apiRequest(`/orders/cart/items/${checkoutCartItemId}`, {
-            method: 'DELETE',
-            accessToken: session?.accessToken,
-          });
-        } catch {
-          // Khong lam fail order neu cleanup cart sau checkout gap loi.
-        }
+    if (hasTarget) {
+      if (selectedOrderId !== targetOrderId) {
+        setSelectedOrderId(targetOrderId);
       }
-      setRetailForm({
-        ...initialRetailForm,
-        offerId: window.localStorage.getItem(ACTIVE_OFFER_KEY) || '',
-      });
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Create retail order failed');
+      return;
     }
+
+    setSelectedOrderId(String(orderList[0].id || ''));
+  }, [orderList, routeOrderId, searchParams, selectedOrderId]);
+
+  useEffect(() => {
+    if (routeOrderId) {
+      if (selectedOrderId !== routeOrderId) {
+        setSelectedOrderId(routeOrderId);
+      }
+      return;
+    }
+
+    const currentOrderId = searchParams.get('orderId') || '';
+    if (!selectedOrderId) {
+      if (currentOrderId) {
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('orderId');
+        setSearchParams(nextParams, { replace: true });
+      }
+      return;
+    }
+
+    if (currentOrderId !== selectedOrderId) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('orderId', selectedOrderId);
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [routeOrderId, searchParams, selectedOrderId, setSearchParams]);
+
+  const selectedOrder =
+    orderList.find((order) => String(order.id || '') === selectedOrderId) ??
+    orderList[0] ??
+    null;
+
+  const orderSummary = useMemo(() => {
+    return orderList.reduce(
+      (summary, order) => {
+        const orderStatus = String(order.orderStatus || '').toLowerCase();
+        if (orderStatus === 'pending') {
+          summary.pending += 1;
+        }
+        if (orderStatus === 'paid') {
+          summary.paid += 1;
+        }
+        if (orderStatus === 'completed') {
+          summary.completed += 1;
+        }
+        summary.total += toNumber(order.buyerPayableAmount || order.totalAmount);
+        return summary;
+      },
+      { pending: 0, paid: 0, completed: 0, total: 0 },
+    );
+  }, [orderList]);
+
+  const timelineSteps = useMemo<TimelineStep[]>(() => {
+    const orderStatus = String(selectedOrder?.orderStatus || '').toLowerCase();
+    const paymentStatus = String(selectedOrder?.paymentStatus || '').toLowerCase();
+    const escrowStatus = String(selectedOrder?.escrowStatus || '').toLowerCase();
+    const isCancelled = orderStatus === 'cancelled';
+    const isRefunded = orderStatus === 'refunded' || paymentStatus === 'refunded';
+    const isPaid = orderStatus === 'paid' || paymentStatus === 'paid';
+    const isCompleted = orderStatus === 'completed';
+
+    return [
+      {
+        key: 'created',
+        label: 'Đơn hàng đã đặt',
+        helper: 'Hệ thống đã ghi nhận đơn hàng của bạn.',
+        done: Boolean(selectedOrder?.id),
+        current: !isPaid && !isCancelled && !isRefunded && !isCompleted,
+      },
+      {
+        key: 'paid',
+        label: selectedOrder?.paymentMethod === 'COD' ? 'Chờ giao hàng và thu tiền' : 'Chờ xác nhận thanh toán',
+        helper:
+          selectedOrder?.paymentMethod === 'COD'
+            ? 'Bạn sẽ thanh toán trực tiếp khi nhận hàng.'
+            : 'Shop hoặc hệ thống sẽ xác nhận sau khi nhận chuyển khoản.',
+        done: isPaid || isCompleted,
+        current: !isPaid && !isCancelled && !isRefunded && !isCompleted,
+      },
+      {
+        key: 'escrow',
+        label: 'Đảm bảo giao dịch',
+        helper:
+          escrowStatus === 'released'
+            ? 'Khoản tiền đã được giải ngân cho người bán.'
+            : escrowStatus === 'held'
+              ? 'Khoản tiền đang được giữ để bảo vệ giao dịch.'
+              : 'Bước này sẽ cập nhật sau khi thanh toán được xác nhận.',
+        done: escrowStatus === 'held' || escrowStatus === 'released',
+        current: isPaid && !isCompleted && !isCancelled && !isRefunded,
+      },
+      {
+        key: 'done',
+        label: isCancelled ? 'Đơn hàng đã hủy' : isRefunded ? 'Đơn hàng đã hoàn tiền' : 'Hoàn tất',
+        helper:
+          isCancelled
+            ? 'Đơn hàng đã bị hủy, không cần thao tác thêm.'
+            : isRefunded
+              ? 'Đơn hàng đã được hoàn tiền.'
+              : 'Đơn hàng hoàn tất sau khi giao nhận thành công.',
+        done: isCancelled || isRefunded || isCompleted,
+        current: false,
+      },
+    ];
+  }, [selectedOrder]);
+
+  function selectOrder(orderId: string) {
+    setSelectedOrderId(orderId);
+    const nextQuery = searchParams.toString();
+    navigate(`/orders/${encodeURIComponent(orderId)}${nextQuery ? `?${nextQuery}` : ''}`);
   }
 
-  async function createWholesaleOrder(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage(null);
-
-    try {
-      const response = await apiRequest<OrderSnapshot>('/orders/wholesale', {
-        method: 'POST',
-        accessToken: session?.accessToken,
-        body: {
-          buyerShopId: wholesaleForm.buyerShopId,
-          buyerDistributionNodeId: wholesaleForm.buyerDistributionNodeId || undefined,
-          offerId: wholesaleForm.offerId,
-          quantity: wholesaleForm.quantity,
-          affiliateCode: wholesaleForm.affiliateCode || null,
-        },
-      });
-
-      setCreatedOrder(summarizeOrder(response));
-      setLookupResult(response);
-      setMessage('Tao wholesale order thanh cong.');
-      setWholesaleForm({
-        ...initialWholesaleForm,
-        buyerShopId: window.localStorage.getItem(ACTIVE_SHOP_KEY) || '',
-        offerId: window.localStorage.getItem(ACTIVE_OFFER_KEY) || '',
-      });
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Create wholesale order failed');
-    }
-  }
-
-  async function lookupOrder(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLookupLoading(true);
-    setLookupError(null);
-
-    try {
-      const response = await apiRequest(`/orders/${lookupId}`, {
-        accessToken: session?.accessToken,
-      });
-      setLookupResult(response);
-      setCreatedOrder(summarizeOrder(response));
-    } catch (error) {
-      setLookupError(error instanceof Error ? error.message : 'Lookup order failed');
-      setLookupResult(null);
-      setCreatedOrder(null);
-    } finally {
-      setLookupLoading(false);
-    }
-  }
+  const selectedItems = selectedOrder?.items || [];
+  const itemsTotal = selectedItems.reduce((sum, item) => sum + toNumber(item.unitPrice) * toNumber(item.quantity), 0);
 
   return (
-    <div className="page-stack">
-      <header className="page-header">
-        <p className="eyebrow">Orders</p>
-        <h1>Tao va truy van order</h1>
-        <p className="muted">
-          Trang nay an theo active offer va active shop da chon tu luong truoc, de ban test giao dich lien mach hon.
-        </p>
-      </header>
+    <div className="orders-dashboard-page">
+      <BreadcrumbNav
+        items={[
+          { label: 'Trang chủ', to: '/' },
+          { label: 'Tài khoản của tôi', to: '/user' },
+          { label: 'Đơn hàng của tôi' },
+        ]}
+      />
 
-      {checkoutOfferId ? (
-        <div className="empty-state">
-          Don retail dang duoc prefill tu gio hang. <Link className="link-inline" to="/cart">Quay lai gio hang</Link>
+      <section className="orders-hero">
+        <div>
+          <span>Quản lý mua hàng</span>
+          <h1>Đơn hàng của tôi</h1>
+          <p>Theo dõi trạng thái đơn, thanh toán, sản phẩm đã đặt và tổng tiền trong một màn hình gọn hơn.</p>
         </div>
-      ) : null}
+        <Link className="secondary-button link-button" to="/products">
+          Tiếp tục mua hàng
+        </Link>
+      </section>
 
-      <PageSection title="Ngu canh dang thao tac">
-        <div className="context-grid">
-          <div className="context-card">
-            <p className="eyebrow">Active offer</p>
-            <strong>{activeOfferId || 'Chua chon offer'}</strong>
+      <section className="order-summary-strip">
+        <article>
+          <span>Chờ xử lý</span>
+          <strong>{orderSummary.pending}</strong>
+        </article>
+        <article>
+          <span>Đã thanh toán</span>
+          <strong>{orderSummary.paid}</strong>
+        </article>
+        <article>
+          <span>Hoàn tất</span>
+          <strong>{orderSummary.completed}</strong>
+        </article>
+        <article>
+          <span>Tổng đã đặt</span>
+          <strong>{formatMoney(orderSummary.total)}</strong>
+        </article>
+      </section>
+
+      <section className="orders-layout">
+        <aside className="orders-sidebar">
+          <div className="orders-sidebar-head">
+            <h2>Danh sách đơn</h2>
+            <p>Chọn đơn để xem chi tiết.</p>
           </div>
-          <div className="context-card">
-            <p className="eyebrow">Active buyer shop</p>
-            <strong>{activeShopId || 'Chua chon shop'}</strong>
-          </div>
-          <div className="context-card">
-            <p className="eyebrow">Buyer node goi y</p>
-            <strong>{wholesaleForm.buyerDistributionNodeId || 'Khong dung in-network pricing'}</strong>
-          </div>
-        </div>
-      </PageSection>
 
-      {createdOrder ? (
-        <PageSection title="Order vua thao tac">
-          <KeyValueList
-            items={[
-              { label: 'Order id', value: createdOrder.id },
-              { label: 'Order type', value: createdOrder.orderType },
-              { label: 'Order status', value: createdOrder.orderStatus },
-              { label: 'Payment status', value: createdOrder.paymentStatus },
-              { label: 'Offer id', value: createdOrder.offerId },
-              { label: 'Buyer shop id', value: createdOrder.buyerShopId },
-              { label: 'Total amount', value: createdOrder.totalAmount },
-            ]}
-          />
-        </PageSection>
-      ) : null}
+          {ordersQuery.loading ? (
+            <div className="empty-state">Đang tải đơn hàng...</div>
+          ) : ordersQuery.error ? (
+            <div className="empty-state error">{ordersQuery.error}</div>
+          ) : orderList.length ? (
+            <div className="order-list-panel">
+              {orderList.map((order) => {
+                const isActive = String(order.id || '') === String(selectedOrder?.id || '');
+                const firstItem = order.items?.[0];
 
-      <PageSection title="Retail order">
-        <form className="panel-form" onSubmit={createRetailOrder}>
-          <label>
-            <span>Offer id</span>
-            <input
-              value={retailForm.offerId}
-              onChange={(event) => setRetailForm((prev) => ({ ...prev, offerId: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            <span>Quantity</span>
-            <input
-              type="number"
-              min={1}
-              value={retailForm.quantity}
-              onChange={(event) =>
-                setRetailForm((prev) => ({ ...prev, quantity: Number(event.target.value) }))
-              }
-            />
-          </label>
-          <label>
-            <span>Affiliate code</span>
-            <input
-              value={retailForm.affiliateCode}
-              onChange={(event) =>
-                setRetailForm((prev) => ({ ...prev, affiliateCode: event.target.value }))
-              }
-            />
-          </label>
-          <button className="primary-button" type="submit">
-            Tao retail order
-          </button>
-        </form>
-      </PageSection>
-
-      <PageSection
-        title="Wholesale order"
-        description="Neu buyer co membership active trong network thi chon node o day de ap wholesale pricing."
-      >
-        <form className="panel-form two-columns" onSubmit={createWholesaleOrder}>
-          <label>
-            <span>Buyer shop id</span>
-            <input
-              value={wholesaleForm.buyerShopId}
-              onChange={(event) =>
-                setWholesaleForm((prev) => ({
-                  ...prev,
-                  buyerShopId: event.target.value,
-                  buyerDistributionNodeId: '',
-                }))
-              }
-              required
-            />
-          </label>
-          <label>
-            <span>Buyer distribution node</span>
-            <select
-              value={wholesaleForm.buyerDistributionNodeId}
-              onChange={(event) =>
-                setWholesaleForm((prev) => ({
-                  ...prev,
-                  buyerDistributionNodeId: event.target.value,
-                }))
-              }
-            >
-              <option value="">Khong dung node</option>
-              {matchingMemberships.map((membership) => (
-                <option key={String(membership.nodeId)} value={String(membership.nodeId || '')}>
-                  {membership.networkName || membership.networkId} | {membership.shopName || membership.shopId} | level {String(membership.level ?? '-')}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Offer id</span>
-            <input
-              value={wholesaleForm.offerId}
-              onChange={(event) =>
-                setWholesaleForm((prev) => ({ ...prev, offerId: event.target.value }))
-              }
-              required
-            />
-          </label>
-          <label>
-            <span>Quantity</span>
-            <input
-              type="number"
-              min={1}
-              value={wholesaleForm.quantity}
-              onChange={(event) =>
-                setWholesaleForm((prev) => ({ ...prev, quantity: Number(event.target.value) }))
-              }
-            />
-          </label>
-          <label className="full-width">
-            <span>Affiliate code</span>
-            <input
-              value={wholesaleForm.affiliateCode}
-              onChange={(event) =>
-                setWholesaleForm((prev) => ({ ...prev, affiliateCode: event.target.value }))
-              }
-            />
-          </label>
-          {wholesaleForm.buyerShopId && !matchingMemberships.length ? (
-            <div className="empty-state full-width">
-              Shop nay chua co membership active, nen order se di theo gia thuong neu de trong buyer distribution node.
+                return (
+                  <button
+                    key={String(order.id || '')}
+                    type="button"
+                    className={isActive ? 'order-list-card active' : 'order-list-card'}
+                    onClick={() => selectOrder(String(order.id || ''))}
+                  >
+                    <div>
+                      <strong>#{String(order.id || '').slice(0, 8)}</strong>
+                      <span>{statusLabel(order.orderStatus)}</span>
+                    </div>
+                    <p>{firstItem?.offerTitleSnapshot || 'Đơn hàng'}</p>
+                    <small>{formatDate(order.createdAt)}</small>
+                  </button>
+                );
+              })}
             </div>
-          ) : null}
-          <button className="primary-button full-width" type="submit">
-            Tao wholesale order
-          </button>
-        </form>
-      </PageSection>
+          ) : (
+            <div className="empty-state">
+              Bạn chưa có đơn hàng nào. <Link to="/products">Đi tới trang sản phẩm</Link>
+            </div>
+          )}
+        </aside>
 
-      <PageSection title="Memberships co the dung cho wholesale">
-        <ApiResult
-          title="Memberships"
-          loading={memberships.loading}
-          error={memberships.error}
-          data={matchingMemberships.length ? matchingMemberships : memberships.data}
-        />
-      </PageSection>
+        <main className="orders-main">
+          {selectedOrder ? (
+            <>
+              <section className="order-detail-card order-detail-top">
+                <div className="order-detail-title">
+                  <div>
+                    <span>Chi tiết đơn hàng</span>
+                    <h2>Đơn #{String(selectedOrder.id || '').slice(0, 12)}</h2>
+                    <p>Ngày đặt: {formatDate(selectedOrder.createdAt)}</p>
+                  </div>
+                  <strong className={`order-status-badge ${orderStatusTone(selectedOrder.orderStatus)}`}>
+                    {statusLabel(selectedOrder.orderStatus)}
+                  </strong>
+                </div>
 
-      <PageSection title="Tra cuu order theo id">
-        <form className="inline-form" onSubmit={lookupOrder}>
-          <input value={lookupId} onChange={(event) => setLookupId(event.target.value)} placeholder="Order id" />
-          <button className="primary-button" type="submit">
-            Tra cuu
-          </button>
-        </form>
-        {message ? <div className="empty-state">{message}</div> : null}
-        <ApiResult title="Order detail" loading={lookupLoading} error={lookupError} data={lookupResult} />
-      </PageSection>
+                <div className="order-info-grid compact">
+                  <article>
+                    <span>Người bán</span>
+                    <strong>{selectedOrder.sellerShopName || selectedOrder.sellerShopId || '-'}</strong>
+                  </article>
+                  <article>
+                    <span>Loại đơn</span>
+                    <strong>{selectedOrder.orderMode === 'WHOLESALE' ? 'Đơn sỉ' : 'Đơn lẻ'}</strong>
+                  </article>
+                  <article>
+                    <span>Thanh toán</span>
+                    <strong>{paymentMethodLabel(selectedOrder.paymentMethod)}</strong>
+                  </article>
+                  <article>
+                    <span>Trạng thái thanh toán</span>
+                    <strong>{statusLabel(selectedOrder.paymentStatus)}</strong>
+                  </article>
+                </div>
+              </section>
+
+              <section className="order-detail-card">
+                <div className="order-section-title">
+                  <h2>Sản phẩm đã đặt</h2>
+                  <span>{selectedItems.length} sản phẩm</span>
+                </div>
+
+                <div className="order-product-list">
+                  {selectedItems.map((item, index) => (
+                    <article key={`${item.offerId || 'item'}-${index}`} className="order-product-line">
+                      <span className="cart-product-thumb">AF</span>
+                      <div>
+                        <strong>{item.offerTitleSnapshot || 'Sản phẩm chưa đặt tên'}</strong>
+                        <small>Mức xác thực: {item.verificationLevelSnapshot || '-'}</small>
+                      </div>
+                      <span>{formatMoney(item.unitPrice || 0)}</span>
+                      <span>x{toNumber(item.quantity)}</span>
+                      <strong>{formatMoney(toNumber(item.unitPrice) * toNumber(item.quantity))}</strong>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="order-detail-card">
+                <div className="order-section-title">
+                  <h2>Thanh toán</h2>
+                  <span>{statusLabel(selectedOrder.paymentStatus)}</span>
+                </div>
+
+                <div className="order-payment-box">
+                  <div>
+                    <span>Tạm tính</span>
+                    <strong>{formatMoney(itemsTotal)}</strong>
+                  </div>
+                  <div>
+                    <span>Người mua cần trả</span>
+                    <strong>{formatMoney(selectedOrder.buyerPayableAmount || selectedOrder.totalAmount)}</strong>
+                  </div>
+                  <div>
+                    <span>Mã tham chiếu</span>
+                    <strong>{selectedOrder.paymentProviderRef || '-'}</strong>
+                  </div>
+                </div>
+              </section>
+
+              <section className="order-detail-card">
+                <div className="order-section-title">
+                  <h2>Tiến trình đơn hàng</h2>
+                  <span>{statusLabel(selectedOrder.escrowStatus)}</span>
+                </div>
+
+                <div className="order-stepper">
+                  {timelineSteps.map((step) => (
+                    <article
+                      key={step.key}
+                      className={step.done ? 'order-step done' : step.current ? 'order-step current' : 'order-step'}
+                    >
+                      <span />
+                      <div>
+                        <strong>{step.label}</strong>
+                        <small>{step.helper}</small>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="order-support-card">
+                <div>
+                  <strong>Cần hỗ trợ đơn hàng?</strong>
+                  <p>Nếu đơn có vấn đề, bạn nên liên hệ shop hoặc mở khiếu nại ở bước sau. Các nút nghiệp vụ như hoàn tiền, giải ngân, đánh dấu thanh toán sẽ nằm ở màn hình admin/seller, không đặt ở trang người mua.</p>
+                </div>
+                <Link className="secondary-button link-button" to="/products">
+                  Mua thêm sản phẩm
+                </Link>
+              </section>
+            </>
+          ) : (
+            <section className="order-detail-card">
+              <div className="empty-state">Chưa có đơn hàng nào để hiển thị.</div>
+            </section>
+          )}
+        </main>
+      </section>
     </div>
   );
 }

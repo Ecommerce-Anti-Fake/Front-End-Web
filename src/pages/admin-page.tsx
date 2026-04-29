@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { ApiResult } from '../components/api-result';
+import { KeyValueList } from '../components/key-value-list';
 import { PageSection } from '../components/page-section';
 import { useApiQuery } from '../hooks/use-api-query';
 import { apiRequest } from '../lib/api-client';
@@ -99,12 +100,29 @@ type VerificationSummaryRecord = {
 
 type ShopDocumentRecord = {
   id?: string;
+  requirementId?: string | null;
   docType?: string;
   fileUrl?: string;
+  files?: Array<{
+    id?: string;
+    fileUrl?: string;
+    mediaAssetId?: string;
+    sortOrder?: number;
+  }>;
   reviewStatus?: string;
   reviewNote?: string | null;
   uploadedAt?: string;
   [key: string]: unknown;
+};
+
+type ShopDocumentRequirementRecord = {
+  id?: string;
+  code?: string;
+  name?: string;
+  description?: string | null;
+  required?: boolean;
+  multipleFilesAllowed?: boolean;
+  document?: ShopDocumentRecord | null;
 };
 
 type CategoryDocumentRecord = {
@@ -127,6 +145,12 @@ type VerificationDetailRecord = {
     businessType?: string;
     taxCode?: string | null;
     shopStatus?: string;
+    shopType?: {
+      id?: string;
+      code?: string;
+      name?: string;
+      description?: string | null;
+    } | null;
     registeredCategories?: Array<{
       categoryId?: string;
       categoryName?: string;
@@ -134,8 +158,63 @@ type VerificationDetailRecord = {
     }>;
   };
   summary?: VerificationSummaryRecord;
+  shopDocumentRequirements?: ShopDocumentRequirementRecord[];
   shopDocuments?: ShopDocumentRecord[];
   categoryDocuments?: CategoryDocumentRecord[];
+  [key: string]: unknown;
+};
+
+type BrandAuthorizationRecord = {
+  id?: string;
+  shopId?: string;
+  shopName?: string | null;
+  shopRegistrationType?: string | null;
+  brandId?: string;
+  brandName?: string | null;
+  authorizationType?: string;
+  fileUrl?: string | null;
+  verificationStatus?: string;
+  reviewNote?: string | null;
+  createdAt?: string;
+  verifiedAt?: string | null;
+  [key: string]: unknown;
+};
+
+type AdminOpenDisputeRecord = {
+  id?: string;
+  orderId?: string;
+  reason?: string;
+  disputeStatus?: string;
+  resolution?: string | null;
+  assignedAdminUserId?: string | null;
+  buyerUserId?: string;
+  sellerShopId?: string;
+  sellerShopName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
+type AdminDisputeDetailRecord = {
+  dispute?: AdminOpenDisputeRecord;
+  moderationCase?: {
+    id?: string;
+    caseStatus?: string;
+    assignedAdminUserId?: string | null;
+    internalNote?: string | null;
+    [key: string]: unknown;
+  } | null;
+  order?: {
+    id?: string;
+    orderStatus?: string;
+    paymentStatus?: string;
+    totalAmount?: number | string;
+    buyerPayableAmount?: number | string;
+    sellerReceivableAmount?: number | string;
+    [key: string]: unknown;
+  } | null;
+  evidence?: unknown[];
+  timeline?: unknown[];
   [key: string]: unknown;
 };
 
@@ -154,6 +233,29 @@ function normalizeList<T>(data: unknown, keys: string[]): T[] {
   }
 
   return [];
+}
+
+function adminStatusLabel(status?: string) {
+  const value = String(status || '').toLowerCase();
+  if (value === 'approved') {
+    return 'Đã duyệt';
+  }
+  if (value === 'pending') {
+    return 'Chờ duyệt';
+  }
+  if (value === 'rejected') {
+    return 'Bị từ chối';
+  }
+  if (value === 'active') {
+    return 'Đang hoạt động';
+  }
+  if (value === 'pending_verification') {
+    return 'Chờ xác minh';
+  }
+  if (value === 'pending_kyc') {
+    return 'Chờ KYC';
+  }
+  return status || 'Chưa có';
 }
 
 export function AdminPage() {
@@ -177,8 +279,17 @@ export function AdminPage() {
   const [selectedPendingShopId, setSelectedPendingShopId] = useState('');
   const [reviewShopDocumentNote, setReviewShopDocumentNote] = useState('');
   const [reviewCategoryNote, setReviewCategoryNote] = useState('');
+  const [brandAuthorizationStatus, setBrandAuthorizationStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
+  const [brandAuthorizationReviewNote, setBrandAuthorizationReviewNote] = useState('');
+  const [brandAuthorizationMessage, setBrandAuthorizationMessage] = useState<string | null>(null);
   const [shopReviewMessage, setShopReviewMessage] = useState<string | null>(null);
   const [categoryReviewMessage, setCategoryReviewMessage] = useState<string | null>(null);
+  const [selectedDisputeId, setSelectedDisputeId] = useState('');
+  const [adminDisputeNote, setAdminDisputeNote] = useState('');
+  const [adminDisputeCaseStatus, setAdminDisputeCaseStatus] = useState('IN_REVIEW');
+  const [adminDisputeResolution, setAdminDisputeResolution] = useState('RESOLVED');
+  const [adminDisputeMessage, setAdminDisputeMessage] = useState<string | null>(null);
+  const [adminDisputeLoading, setAdminDisputeLoading] = useState(false);
 
   const brandList = useMemo(() => normalizeList<BrandRecord>(brands.data, ['items', 'data', 'brands']), [brands.data]);
   const categoryList = useMemo(
@@ -193,6 +304,14 @@ export function AdminPage() {
     () => normalizeList<PendingShopRecord>(pendingShops.data, ['items', 'data', 'shops']),
     [pendingShops.data],
   );
+  const openDisputeList = useMemo(
+    () => normalizeList<AdminOpenDisputeRecord>(openDisputes.data, ['items', 'data', 'disputes']),
+    [openDisputes.data],
+  );
+  const selectedOpenDispute = useMemo(
+    () => openDisputeList.find((dispute) => String(dispute.id || '') === selectedDisputeId) ?? null,
+    [openDisputeList, selectedDisputeId],
+  );
   const selectedPendingShop = useMemo(
     () => pendingShopList.find((shop) => String(shop.id || '') === selectedPendingShopId) ?? null,
     [pendingShopList, selectedPendingShopId],
@@ -201,10 +320,26 @@ export function AdminPage() {
     selectedPendingShopId ? `/shops/admin/${encodeURIComponent(selectedPendingShopId)}/verification-detail` : '',
     Boolean(selectedPendingShopId),
   );
+  const adminDisputeDetail = useApiQuery<AdminDisputeDetailRecord>(
+    selectedDisputeId ? `/orders/admin/disputes/${encodeURIComponent(selectedDisputeId)}` : '',
+    Boolean(selectedDisputeId),
+  );
+  const brandAuthorizations = useApiQuery<BrandAuthorizationRecord[]>(
+    `/shops/admin/brand-authorizations?verificationStatus=${encodeURIComponent(brandAuthorizationStatus)}`,
+  );
 
   const detailShopDocuments = useMemo(
     () => normalizeList<ShopDocumentRecord>(verificationDetail.data?.shopDocuments, ['items', 'data', 'documents']),
     [verificationDetail.data?.shopDocuments],
+  );
+  const detailShopDocumentRequirements = useMemo(
+    () =>
+      normalizeList<ShopDocumentRequirementRecord>(verificationDetail.data?.shopDocumentRequirements, [
+        'items',
+        'data',
+        'requirements',
+      ]),
+    [verificationDetail.data?.shopDocumentRequirements],
   );
   const detailCategoryDocuments = useMemo(
     () =>
@@ -212,6 +347,10 @@ export function AdminPage() {
     [verificationDetail.data?.categoryDocuments],
   );
   const detailSummary = verificationDetail.data?.summary;
+  const brandAuthorizationList = useMemo(
+    () => normalizeList<BrandAuthorizationRecord>(brandAuthorizations.data, ['items', 'data', 'authorizations']),
+    [brandAuthorizations.data],
+  );
 
   useEffect(() => {
     if (!pendingShopList.length) {
@@ -226,6 +365,19 @@ export function AdminPage() {
     );
   }, [pendingShopList]);
 
+  useEffect(() => {
+    if (!openDisputeList.length) {
+      setSelectedDisputeId('');
+      return;
+    }
+
+    setSelectedDisputeId((prev) =>
+      openDisputeList.some((dispute) => String(dispute.id || '') === prev)
+        ? prev
+        : String(openDisputeList[0]?.id || ''),
+    );
+  }, [openDisputeList]);
+
   async function handleCreateBrand(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -239,7 +391,7 @@ export function AdminPage() {
         },
       });
 
-      setBrandMessage('Tao brand thanh cong.');
+      setBrandMessage('Tạo brand thành công.');
       setBrandForm(initialBrandForm);
       if (created.id) {
         setProductModelForm((prev) => ({
@@ -267,7 +419,7 @@ export function AdminPage() {
         },
       });
 
-      setCategoryMessage('Tao category thanh cong.');
+      setCategoryMessage('Tạo category thành công.');
       setCategoryForm(initialCategoryForm);
       await categories.reload();
     } catch (error) {
@@ -292,7 +444,7 @@ export function AdminPage() {
         },
       });
 
-      setProductModelMessage('Tao product model thanh cong.');
+      setProductModelMessage('Tạo product model thành công.');
       setProductModelForm((prev) => ({
         ...initialProductModelForm,
         brandId: prev.brandId,
@@ -341,6 +493,111 @@ export function AdminPage() {
     }
   }
 
+  async function reviewBrandAuthorization(authorizationId: string, verificationStatus: 'approved' | 'rejected') {
+    try {
+      setBrandAuthorizationMessage(null);
+      await apiRequest(`/shops/brand-authorizations/${encodeURIComponent(authorizationId)}/review`, {
+        method: 'POST',
+        accessToken: session?.accessToken,
+        body: {
+          verificationStatus,
+          reviewNote: brandAuthorizationReviewNote || undefined,
+        },
+      });
+      setBrandAuthorizationMessage(
+        verificationStatus === 'approved' ? 'Đã duyệt hồ sơ ủy quyền thương hiệu.' : 'Đã từ chối hồ sơ ủy quyền thương hiệu.',
+      );
+      setBrandAuthorizationReviewNote('');
+      await brandAuthorizations.reload();
+    } catch (error) {
+      setBrandAuthorizationMessage(error instanceof Error ? error.message : 'Review brand authorization failed');
+    }
+  }
+
+  async function assignAdminDispute() {
+    if (!selectedDisputeId) {
+      setAdminDisputeMessage('Cần chọn dispute trước.');
+      return;
+    }
+
+    try {
+      setAdminDisputeLoading(true);
+      setAdminDisputeMessage(null);
+      await apiRequest(`/orders/admin/disputes/${encodeURIComponent(selectedDisputeId)}/assign`, {
+        method: 'POST',
+        accessToken: session?.accessToken,
+        body: {
+          internalNote: adminDisputeNote || undefined,
+        },
+      });
+      setAdminDisputeMessage('Da assign dispute cho admin hien tai.');
+      setAdminDisputeNote('');
+      await Promise.all([openDisputes.reload(), adminDisputeDetail.reload()]);
+    } catch (error) {
+      setAdminDisputeMessage(error instanceof Error ? error.message : 'Assign dispute failed');
+    } finally {
+      setAdminDisputeLoading(false);
+    }
+  }
+
+  async function updateAdminDisputeCase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!selectedDisputeId) {
+      setAdminDisputeMessage('Cần chọn dispute trước.');
+      return;
+    }
+
+    try {
+      setAdminDisputeLoading(true);
+      setAdminDisputeMessage(null);
+      await apiRequest(`/orders/admin/disputes/${encodeURIComponent(selectedDisputeId)}/case`, {
+        method: 'POST',
+        accessToken: session?.accessToken,
+        body: {
+          caseStatus: adminDisputeCaseStatus,
+          internalNote: adminDisputeNote || undefined,
+        },
+      });
+      setAdminDisputeMessage('Da cap nhat case status.');
+      setAdminDisputeNote('');
+      await Promise.all([openDisputes.reload(), adminDisputeDetail.reload()]);
+    } catch (error) {
+      setAdminDisputeMessage(error instanceof Error ? error.message : 'Update dispute case failed');
+    } finally {
+      setAdminDisputeLoading(false);
+    }
+  }
+
+  async function resolveAdminDispute(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!selectedDisputeId) {
+      setAdminDisputeMessage('Cần chọn dispute trước.');
+      return;
+    }
+
+    try {
+      setAdminDisputeLoading(true);
+      setAdminDisputeMessage(null);
+      await apiRequest(`/orders/admin/disputes/${encodeURIComponent(selectedDisputeId)}/resolve`, {
+        method: 'POST',
+        accessToken: session?.accessToken,
+        body: {
+          resolution: adminDisputeResolution,
+          internalNote: adminDisputeNote || undefined,
+        },
+      });
+      setAdminDisputeMessage('Da resolve dispute bang quyen admin.');
+      setAdminDisputeNote('');
+      await Promise.all([openDisputes.reload(), adminDisputeDetail.reload()]);
+    } catch (error) {
+      setAdminDisputeMessage(error instanceof Error ? error.message : 'Resolve admin dispute failed');
+    } finally {
+      setAdminDisputeLoading(false);
+    }
+  }
+
   return (
     <div className="page-stack">
       <header className="page-header">
@@ -348,9 +605,244 @@ export function AdminPage() {
         <h1>Moderation va operations</h1>
       </header>
 
-      <PageSection title="Shop moderation workspace" description="Duyet shop document va category verification ngay tai day.">
+      <PageSection
+        title="Duyệt ủy quyền thương hiệu"
+        description="Admin kiểm tra giấy tờ chứng minh shop được phép bán hoặc sở hữu một thương hiệu cụ thể."
+      >
+        <div className="panel-form two-columns">
+          <label>
+            <span>Trạng thái hồ sơ</span>
+            <select
+              value={brandAuthorizationStatus}
+              onChange={(event) =>
+                setBrandAuthorizationStatus(event.target.value as 'pending' | 'approved' | 'rejected')
+              }
+            >
+              <option value="pending">Chờ duyệt</option>
+              <option value="approved">Đã duyệt</option>
+              <option value="rejected">Đã từ chối</option>
+            </select>
+          </label>
+          <label>
+            <span>Ghi chú review</span>
+            <input
+              value={brandAuthorizationReviewNote}
+              onChange={(event) => setBrandAuthorizationReviewNote(event.target.value)}
+              placeholder="Nhập lý do duyệt hoặc từ chối"
+            />
+          </label>
+        </div>
+
+        {brandAuthorizationMessage ? <div className="empty-state">{brandAuthorizationMessage}</div> : null}
+
+        {brandAuthorizations.loading ? (
+          <div className="empty-state">Đang tải hồ sơ ủy quyền thương hiệu...</div>
+        ) : brandAuthorizations.error ? (
+          <div className="empty-state error">{brandAuthorizations.error}</div>
+        ) : brandAuthorizationList.length ? (
+          <div className="entity-grid">
+            {brandAuthorizationList.map((authorization) => (
+              <article key={String(authorization.id)} className="entity-card">
+                <div className="entity-card-header">
+                  <div>
+                    <h3>{authorization.brandName || authorization.brandId || 'Thương hiệu'}</h3>
+                    <p className="muted">
+                      {authorization.shopName || authorization.shopId || '-'} | {authorization.shopRegistrationType || '-'}
+                    </p>
+                  </div>
+                  <span className="tag highlight">{authorization.verificationStatus || '-'}</span>
+                </div>
+                <div className="tag-row">
+                  <span className="tag">Loại: {authorization.authorizationType || '-'}</span>
+                  <span className="tag">Tạo lúc: {authorization.createdAt || '-'}</span>
+                  <span className="tag">Shop: {authorization.shopId || '-'}</span>
+                </div>
+                {authorization.reviewNote ? <p className="muted">{authorization.reviewNote}</p> : null}
+                <div className="storefront-card-actions">
+                  {authorization.fileUrl ? (
+                    <a className="secondary-button link-button" href={authorization.fileUrl} target="_blank" rel="noreferrer">
+                      Xem hồ sơ
+                    </a>
+                  ) : null}
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => void reviewBrandAuthorization(String(authorization.id || ''), 'approved')}
+                  >
+                    Duyệt
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void reviewBrandAuthorization(String(authorization.id || ''), 'rejected')}
+                  >
+                    Từ chối
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">Không có hồ sơ ủy quyền thương hiệu ở trạng thái này.</div>
+        )}
+      </PageSection>
+
+      <PageSection
+        title="Dispute moderation workspace"
+        description="Admin xem chi tiet dispute, evidence, timeline, assign case va resolve khi can refund/ket thuc tranh chap."
+      >
+        {openDisputes.loading ? (
+          <div className="empty-state">Đang tải dispute đang mở...</div>
+        ) : openDisputes.error ? (
+          <div className="empty-state error">{openDisputes.error}</div>
+        ) : openDisputeList.length ? (
+          <>
+            <div className="entity-grid">
+              {openDisputeList.map((dispute) => {
+                const isSelected = String(dispute.id || '') === selectedDisputeId;
+                return (
+                  <article key={String(dispute.id)} className={isSelected ? 'entity-card active' : 'entity-card'}>
+                    <div className="entity-card-header">
+                      <div>
+                        <h3>{dispute.reason || 'Dispute'}</h3>
+                        <p className="muted">
+                          Order {String(dispute.orderId || '-')} | Seller {dispute.sellerShopName || dispute.sellerShopId || '-'}
+                        </p>
+                      </div>
+                      {isSelected ? <span className="tag highlight">Đang xem</span> : null}
+                    </div>
+                    <div className="tag-row">
+                      <span className="tag">Status: {String(dispute.disputeStatus || '-')}</span>
+                      <span className="tag">Assigned: {String(dispute.assignedAdminUserId || 'Unassigned')}</span>
+                    </div>
+                    <button className="secondary-button" type="button" onClick={() => setSelectedDisputeId(String(dispute.id || ''))}>
+                      Xem dispute
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+
+            {selectedDisputeId ? (
+              <div className="page-stack">
+                {adminDisputeDetail.loading ? (
+                  <div className="empty-state">Đang tải chi tiết dispute...</div>
+                ) : adminDisputeDetail.error ? (
+                  <div className="empty-state error">{adminDisputeDetail.error}</div>
+                ) : adminDisputeDetail.data ? (
+                  <>
+                    <div className="context-grid">
+                      <div className="context-card">
+                        <p className="eyebrow">Dispute</p>
+                        <strong>{adminDisputeDetail.data.dispute?.reason || selectedOpenDispute?.reason || '-'}</strong>
+                        <p className="muted">
+                          {adminDisputeDetail.data.dispute?.disputeStatus || selectedOpenDispute?.disputeStatus || '-'} | ID {selectedDisputeId}
+                        </p>
+                      </div>
+                      <div className="context-card">
+                        <p className="eyebrow">Moderation case</p>
+                        <strong>{adminDisputeDetail.data.moderationCase?.caseStatus || 'Chưa có case'}</strong>
+                        <p className="muted">
+                          Assigned {adminDisputeDetail.data.moderationCase?.assignedAdminUserId || selectedOpenDispute?.assignedAdminUserId || 'Unassigned'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <KeyValueList
+                      items={[
+                        { label: 'Order id', value: adminDisputeDetail.data.order?.id || adminDisputeDetail.data.dispute?.orderId },
+                        { label: 'Order status', value: adminDisputeDetail.data.order?.orderStatus },
+                        { label: 'Payment status', value: adminDisputeDetail.data.order?.paymentStatus },
+                        { label: 'Buyer payable', value: adminDisputeDetail.data.order?.buyerPayableAmount || adminDisputeDetail.data.order?.totalAmount },
+                        { label: 'Seller receivable', value: adminDisputeDetail.data.order?.sellerReceivableAmount },
+                        { label: 'Resolution', value: adminDisputeDetail.data.dispute?.resolution },
+                      ]}
+                    />
+
+                    <label>
+                      <span>Internal note</span>
+                      <textarea
+                        value={adminDisputeNote}
+                        onChange={(event) => setAdminDisputeNote(event.target.value)}
+                        placeholder="Ghi chu noi bo cho assign/case/resolve"
+                      />
+                    </label>
+
+                    <div className="storefront-card-actions">
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={adminDisputeLoading || !selectedDisputeId}
+                        onClick={() => void assignAdminDispute()}
+                      >
+                        Assign cho toi
+                      </button>
+                    </div>
+
+                    <form className="panel-form two-columns" onSubmit={updateAdminDisputeCase}>
+                      <label>
+                        <span>Case status</span>
+                        <select
+                          value={adminDisputeCaseStatus}
+                          onChange={(event) => setAdminDisputeCaseStatus(event.target.value)}
+                        >
+                          <option value="ASSIGNED">ASSIGNED</option>
+                          <option value="IN_REVIEW">IN_REVIEW</option>
+                          <option value="ESCALATED">ESCALATED</option>
+                          <option value="RESOLVED">RESOLVED</option>
+                          <option value="CLOSED">CLOSED</option>
+                        </select>
+                      </label>
+                      <button className="secondary-button" type="submit" disabled={adminDisputeLoading || !selectedDisputeId}>
+                        Cap nhat case
+                      </button>
+                    </form>
+
+                    <form className="panel-form two-columns" onSubmit={resolveAdminDispute}>
+                      <label>
+                        <span>Resolution</span>
+                        <select
+                          value={adminDisputeResolution}
+                          onChange={(event) => setAdminDisputeResolution(event.target.value)}
+                        >
+                          <option value="RESOLVED">RESOLVED</option>
+                          <option value="REFUNDED">REFUNDED</option>
+                        </select>
+                      </label>
+                      <button className="secondary-button" type="submit" disabled={adminDisputeLoading || !selectedDisputeId}>
+                        Admin resolve
+                      </button>
+                    </form>
+
+                    {adminDisputeMessage ? <div className="empty-state">{adminDisputeMessage}</div> : null}
+
+                    <div className="data-grid">
+                      <ApiResult
+                        title="Evidence"
+                        loading={adminDisputeDetail.loading}
+                        error={adminDisputeDetail.error}
+                        data={adminDisputeDetail.data.evidence}
+                      />
+                      <ApiResult
+                        title="Timeline"
+                        loading={adminDisputeDetail.loading}
+                        error={adminDisputeDetail.error}
+                        data={adminDisputeDetail.data.timeline}
+                      />
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <ApiResult title="Open disputes" loading={openDisputes.loading} error={openDisputes.error} data={openDisputes.data} />
+        )}
+      </PageSection>
+
+      <PageSection title="Duyệt xác minh shop" description="Kiểm tra checklist hồ sơ theo loại shop, duyệt giấy tờ và danh mục kinh doanh.">
         {pendingShops.loading ? (
-          <div className="empty-state">Dang tai pending shops...</div>
+          <div className="empty-state">Đang tải shop chờ duyệt...</div>
         ) : pendingShops.error ? (
           <div className="empty-state error">{pendingShops.error}</div>
         ) : pendingShopList.length ? (
@@ -367,7 +859,7 @@ export function AdminPage() {
                           {shop.ownerDisplayName || shop.ownerEmail || '-'} | {shop.registrationType || '-'}
                         </p>
                       </div>
-                      {isSelected ? <span className="tag highlight">Dang xem</span> : null}
+                      {isSelected ? <span className="tag highlight">Đang xem</span> : null}
                     </div>
                     <div className="tag-row">
                       <span className="tag">Status: {String(shop.shopStatus || '-')}</span>
@@ -386,7 +878,7 @@ export function AdminPage() {
             {selectedPendingShopId ? (
               <div className="page-stack">
                 {verificationDetail.loading ? (
-                  <div className="empty-state">Dang tai verification detail...</div>
+                  <div className="empty-state">Đang tải chi tiết xác minh...</div>
                 ) : verificationDetail.error ? (
                   <div className="empty-state error">{verificationDetail.error}</div>
                 ) : verificationDetail.data ? (
@@ -409,69 +901,104 @@ export function AdminPage() {
                         <p className="muted">
                           {Array.isArray(detailSummary?.missingRequirements) && detailSummary?.missingRequirements.length
                             ? detailSummary.missingRequirements.join(', ')
-                            : 'Khong con requirement nao'}
+                            : 'Không còn requirement nào'}
                         </p>
                       </div>
                     </div>
 
                     <div className="page-stack">
                       <label>
-                        <span>Shop document review note</span>
+                        <span>Ghi chú duyệt hồ sơ shop</span>
                         <input
                           value={reviewShopDocumentNote}
                           onChange={(event) => setReviewShopDocumentNote(event.target.value)}
-                          placeholder="Ly do approve/reject cho shop document"
+                          placeholder="Nhập lý do duyệt hoặc từ chối hồ sơ"
                         />
                       </label>
                       {shopReviewMessage ? <div className="empty-state">{shopReviewMessage}</div> : null}
-                      {detailShopDocuments.length ? (
-                        <div className="entity-grid">
+                      {detailShopDocumentRequirements.length ? (
+                        <div className="admin-requirement-grid">
+                          {detailShopDocumentRequirements.map((requirement) => {
+                            const document = requirement.document ?? null;
+                            const files = document?.files?.length
+                              ? document.files
+                              : document?.fileUrl
+                                ? [{ id: document.id, fileUrl: document.fileUrl }]
+                                : [];
+                            const isMissing = !document;
+
+                            return (
+                              <article
+                                key={String(requirement.id || requirement.code)}
+                                className={isMissing ? 'admin-requirement-card missing' : 'admin-requirement-card'}
+                              >
+                                <div className="entity-card-header">
+                                  <div>
+                                    <h3>
+                                      {requirement.name || requirement.code || 'Hồ sơ'}
+                                      {requirement.required ? ' *' : ''}
+                                    </h3>
+                                    <p className="muted">{requirement.description || 'Không có mô tả yêu cầu.'}</p>
+                                  </div>
+                                  <span className="tag highlight">
+                                    {document ? adminStatusLabel(document.reviewStatus) : 'Chưa nộp'}
+                                  </span>
+                                </div>
+
+                                {files.length ? (
+                                  <div className="admin-document-files">
+                                    {files.map((file, fileIndex) => (
+                                      <a key={String(file.id || file.fileUrl)} href={file.fileUrl} target="_blank" rel="noreferrer">
+                                        Ảnh {fileIndex + 1}
+                                      </a>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="empty-state">Shop chưa nộp giấy tờ này.</div>
+                                )}
+
+                                {document?.reviewNote ? <p className="muted">{document.reviewNote}</p> : null}
+                                {document ? (
+                                  <div className="storefront-card-actions">
+                                    <button
+                                      className="primary-button"
+                                      type="button"
+                                      onClick={() =>
+                                        void reviewShopDocument(selectedPendingShopId, String(document.id || ''), 'approved')
+                                      }
+                                    >
+                                      Duyệt giấy tờ
+                                    </button>
+                                    <button
+                                      className="secondary-button"
+                                      type="button"
+                                      onClick={() =>
+                                        void reviewShopDocument(selectedPendingShopId, String(document.id || ''), 'rejected')
+                                      }
+                                    >
+                                      Từ chối giấy tờ
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : detailShopDocuments.length ? (
+                        <div className="admin-requirement-grid">
                           {detailShopDocuments.map((document) => (
-                            <article key={String(document.id || document.fileUrl)} className="entity-card">
+                            <article key={String(document.id || document.fileUrl)} className="admin-requirement-card">
                               <div className="entity-card-header">
                                 <div>
-                                  <h3>{document.docType || 'SHOP_DOCUMENT'}</h3>
-                                  <p className="muted">{document.fileUrl || '-'}</p>
+                                  <h3>{document.docType || 'Hồ sơ shop'}</h3>
+                                  <p className="muted">{adminStatusLabel(document.reviewStatus)}</p>
                                 </div>
-                              </div>
-                              <div className="tag-row">
-                                <span className="tag">Status: {String(document.reviewStatus || '-')}</span>
-                                <span className="tag">Uploaded: {String(document.uploadedAt || '-')}</span>
-                              </div>
-                              {document.reviewNote ? <p className="muted">{document.reviewNote}</p> : null}
-                              <div className="storefront-card-actions">
-                                <button
-                                  className="primary-button"
-                                  type="button"
-                                  onClick={() =>
-                                    void reviewShopDocument(
-                                      selectedPendingShopId,
-                                      String(document.id || ''),
-                                      'approved',
-                                    )
-                                  }
-                                >
-                                  Approve document
-                                </button>
-                                <button
-                                  className="secondary-button"
-                                  type="button"
-                                  onClick={() =>
-                                    void reviewShopDocument(
-                                      selectedPendingShopId,
-                                      String(document.id || ''),
-                                      'rejected',
-                                    )
-                                  }
-                                >
-                                  Reject document
-                                </button>
                               </div>
                             </article>
                           ))}
                         </div>
                       ) : (
-                        <div className="empty-state">Shop nay chua nop shop document.</div>
+                        <div className="empty-state">Shop này chưa nộp hồ sơ shop.</div>
                       )}
                     </div>
 
@@ -519,7 +1046,7 @@ export function AdminPage() {
                                     ))}
                                   </div>
                                 ) : (
-                                  <div className="empty-state">Chua co category document.</div>
+                                  <div className="empty-state">Chưa có hồ sơ category.</div>
                                 )}
                                 <div className="storefront-card-actions">
                                   <button
@@ -554,7 +1081,7 @@ export function AdminPage() {
                           })}
                         </div>
                       ) : (
-                        <div className="empty-state">Khong co category verification de duyet.</div>
+                        <div className="empty-state">Không có category verification để duyệt.</div>
                       )}
                     </div>
                   </>
@@ -567,7 +1094,7 @@ export function AdminPage() {
         )}
       </PageSection>
 
-      <PageSection title="Tao brand" description="Tao brand truoc, sau do dung brand nay de tao product model.">
+      <PageSection title="Tạo brand" description="Tạo brand trước, sau đó dùng brand này để tạo product model.">
         <form className="panel-form two-columns" onSubmit={handleCreateBrand}>
           <label>
             <span>Brand name</span>
@@ -588,14 +1115,14 @@ export function AdminPage() {
           </label>
           {brandMessage ? <div className="empty-state full-width">{brandMessage}</div> : null}
           <button className="primary-button full-width" type="submit">
-            Tao brand
+            Tạo brand
           </button>
         </form>
       </PageSection>
 
       <PageSection title="Danh sach brand">
         {brands.loading ? (
-          <div className="empty-state">Dang tai brands...</div>
+          <div className="empty-state">Đang tải brand...</div>
         ) : brands.error ? (
           <div className="empty-state error">{brands.error}</div>
         ) : brandList.length ? (
@@ -621,7 +1148,7 @@ export function AdminPage() {
                     }))
                   }
                 >
-                  Dung brand nay
+                  Dùng brand này
                 </button>
               </article>
             ))}
@@ -631,7 +1158,7 @@ export function AdminPage() {
         )}
       </PageSection>
 
-      <PageSection title="Tao category" description="Them category de seller khong phai go categoryId bang tay khi tao offer.">
+      <PageSection title="Tạo category" description="Thêm category để người bán không phải gõ categoryId bằng tay khi tạo offer.">
         <form className="panel-form two-columns" onSubmit={handleCreateCategory}>
           <label>
             <span>Category name</span>
@@ -660,7 +1187,7 @@ export function AdminPage() {
                 setCategoryForm((prev) => ({ ...prev, parentId: event.target.value }))
               }
             >
-              <option value="">Khong co</option>
+              <option value="">Không có</option>
               {categoryList.map((category) => (
                 <option key={String(category.id)} value={String(category.id || '')}>
                   {category.name || category.id}
@@ -670,14 +1197,14 @@ export function AdminPage() {
           </label>
           {categoryMessage ? <div className="empty-state full-width">{categoryMessage}</div> : null}
           <button className="primary-button full-width" type="submit">
-            Tao category
+            Tạo category
           </button>
         </form>
       </PageSection>
 
       <PageSection title="Danh sach category">
         {categories.loading ? (
-          <div className="empty-state">Dang tai categories...</div>
+          <div className="empty-state">Đang tải category...</div>
         ) : categories.error ? (
           <div className="empty-state error">{categories.error}</div>
         ) : categoryList.length ? (
@@ -708,7 +1235,7 @@ export function AdminPage() {
       </PageSection>
 
       <PageSection
-        title="Tao product model"
+        title="Tạo product model"
         description="Sau khi tao model o day, seller co the qua trang Products va dung model do de tao offer."
       >
         <form className="panel-form two-columns" onSubmit={handleCreateProductModel}>
@@ -791,14 +1318,14 @@ export function AdminPage() {
           </label>
           {productModelMessage ? <div className="empty-state full-width">{productModelMessage}</div> : null}
           <button className="primary-button full-width" type="submit">
-            Tao product model
+            Tạo product model
           </button>
         </form>
       </PageSection>
 
       <PageSection title="Product models hien co">
         {productModels.loading ? (
-          <div className="empty-state">Dang tai product models...</div>
+          <div className="empty-state">Đang tải product model...</div>
         ) : productModels.error ? (
           <div className="empty-state error">{productModels.error}</div>
         ) : productModelList.length ? (
@@ -840,15 +1367,6 @@ export function AdminPage() {
           loading={moderation.loading}
           error={moderation.error}
           data={moderation.data}
-        />
-      </PageSection>
-
-      <PageSection title="Open disputes">
-        <ApiResult
-          title="Open disputes"
-          loading={openDisputes.loading}
-          error={openDisputes.error}
-          data={openDisputes.data}
         />
       </PageSection>
 

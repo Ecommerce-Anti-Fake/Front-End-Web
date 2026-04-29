@@ -1,8 +1,9 @@
-import { useEffect, useMemo } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { PageSection } from '../components/page-section';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { BreadcrumbNav } from '../components/breadcrumb-nav';
 import { addToCart } from '../lib/cart';
 import { useApiQuery } from '../hooks/use-api-query';
+import { useAuth } from '../modules/auth/auth-context';
 
 const ACTIVE_OFFER_KEY = 'eaf-active-offer-id';
 
@@ -19,11 +20,9 @@ type OfferRecord = {
   verificationLevel?: string;
   shopId?: string;
   shopName?: string;
-  productModelId?: string;
   productModelName?: string;
   categoryId?: string;
   categoryName?: string;
-  createdAt?: string;
   [key: string]: unknown;
 };
 
@@ -65,7 +64,11 @@ function normalizeList<T>(data: unknown, keys: string[]): T[] {
 export function OfferDetailPage() {
   const params = useParams<{ offerId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { isAuthenticated } = useAuth();
   const offerId = params.offerId || '';
+  const [quantity, setQuantity] = useState(1);
+  const [message, setMessage] = useState<string | null>(null);
 
   const offerDetail = useApiQuery<OfferRecord>(offerId ? `/products/offers/${offerId}` : '', Boolean(offerId));
   const offerMedia = useApiQuery(offerId ? `/products/offers/${offerId}/media` : '', Boolean(offerId));
@@ -79,15 +82,13 @@ export function OfferDetailPage() {
     () => normalizeList<OfferDocumentRecord>(offerDocuments.data, ['items', 'data', 'documents']),
     [offerDocuments.data],
   );
-  const primaryImage = mediaList[0]?.fileUrl || null;
+  const primaryImage = mediaList.find((media) => media.fileUrl)?.fileUrl || null;
   const offer = offerDetail.data;
 
   useEffect(() => {
-    if (!offerId) {
-      return;
+    if (offerId) {
+      window.localStorage.setItem(ACTIVE_OFFER_KEY, offerId);
     }
-
-    window.localStorage.setItem(ACTIVE_OFFER_KEY, offerId);
   }, [offerId]);
 
   async function handleAddToCart() {
@@ -95,150 +96,123 @@ export function OfferDetailPage() {
       return;
     }
 
-    await addToCart({
-      offerId: String(offer.id),
-      quantity: 1,
-    });
+    if (!isAuthenticated) {
+      navigate('/auth', {
+        state: {
+          nextPath: `${location.pathname}${location.search}`,
+        },
+      });
+      return;
+    }
+
+    try {
+      setMessage(null);
+      await addToCart({
+        offerId: String(offer.id),
+        quantity,
+      });
+      setMessage('Đã thêm sản phẩm vào giỏ hàng.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Thêm vào giỏ hàng thất bại.');
+    }
   }
 
   return (
-    <div className="page-stack">
-      <header className="page-header">
-        <p className="eyebrow">Offer detail</p>
-        <h1>{offer?.title || offerId || 'Chi tiet offer'}</h1>
-        <p className="muted">
-          Trang chi tiet danh cho buyer. Offer duoc luu thanh active offer de di tiep sang trang Orders khi can.
-        </p>
-      </header>
+    <div className="product-detail-page">
+      <BreadcrumbNav items={[{ label: 'Trang chủ', to: '/' }, { label: 'Sản phẩm', to: '/products' }, { label: 'Chi tiết sản phẩm' }]} />
 
-      <div className="offer-detail-toolbar">
-        <button className="secondary-button" type="button" onClick={() => navigate('/products')}>
-          Quay lai catalog
-        </button>
-        <button className="secondary-button" type="button" onClick={() => void handleAddToCart()}>
-          Them vao gio
-        </button>
-        <Link className="primary-button link-button" to="/orders">
-          Dat hang voi offer nay
-        </Link>
-      </div>
-
-      <PageSection title="Tong quan offer">
-        {offerDetail.loading ? (
-          <div className="empty-state">Dang tai chi tiet offer...</div>
-        ) : offerDetail.error ? (
-          <div className="empty-state error">{offerDetail.error}</div>
-        ) : (
-          <div className="offer-detail-layout">
-            <div className="offer-gallery-panel">
-              {primaryImage ? (
-                <img src={primaryImage} alt={offer?.title || 'Offer image'} className="storefront-image" />
-              ) : (
-                <div className="storefront-placeholder">
-                  <strong>{offer?.productModelName || 'Offer media'}</strong>
-                  <p className="muted">Offer nay chua co media dai dien.</p>
-                </div>
-              )}
-            </div>
-
-            <div className="offer-summary-panel">
-              <span className="eyebrow">{offer?.categoryName || offer?.categoryId || 'Category'}</span>
-              <h2>{offer?.title || '-'}</h2>
-              <p className="muted">{offer?.description || 'Khong co mo ta chi tiet.'}</p>
-              <div className="offer-price-block">
-                <strong>
-                  {String(offer?.price ?? '-')} {offer?.currency || 'VND'}
-                </strong>
-                <span className="muted">Ban boi {offer?.shopName || offer?.shopId || '-'}</span>
+      {offerDetail.loading ? (
+        <div className="empty-state">Đang tải chi tiết sản phẩm...</div>
+      ) : offerDetail.error ? (
+        <div className="empty-state error">{offerDetail.error}</div>
+      ) : (
+        <>
+          <section className="product-detail-layout">
+            <div className="product-gallery">
+              <div className="product-main-image">
+                {primaryImage ? (
+                  <img src={primaryImage} alt={offer?.title || 'Product'} />
+                ) : (
+                  <span>{offer?.categoryName?.slice(0, 2).toUpperCase() || 'AF'}</span>
+                )}
               </div>
-              <div className="tag-row">
-                <span className="tag">Mode: {String(offer?.salesMode ?? '-')}</span>
-                <span className="tag">Qty: {String(offer?.availableQuantity ?? '-')}</span>
-                <span className="tag">Status: {String(offer?.offerStatus ?? '-')}</span>
-                <span className="tag">Verification: {String(offer?.verificationLevel ?? '-')}</span>
-                {offer?.minWholesaleQty ? (
-                  <span className="tag">Min wholesale: {String(offer.minWholesaleQty)}</span>
-                ) : null}
-              </div>
-              <div className="offer-actions">
-                <button className="secondary-button" type="button" onClick={() => void handleAddToCart()}>
-                  Them vao gio
-                </button>
-                <Link className="primary-button link-button" to="/cart">
-                  Mo gio hang
-                </Link>
-              </div>
-            </div>
-          </div>
-        )}
-      </PageSection>
-
-      <PageSection title="Media va tai lieu">
-        <div className="evidence-grid">
-          <div className="evidence-panel">
-            <div className="section-header compact">
-              <div>
-                <h2>Gallery</h2>
-                <p className="muted">Hinh anh va media dinh kem cua offer.</p>
-              </div>
-            </div>
-            {offerMedia.loading ? (
-              <div className="empty-state">Dang tai media...</div>
-            ) : offerMedia.error ? (
-              <div className="empty-state error">{offerMedia.error}</div>
-            ) : mediaList.length ? (
-              <div className="offer-gallery-grid">
-                {mediaList.map((media) => (
-                  <article key={String(media.id || media.fileUrl)} className="offer-gallery-item">
-                    {media.assetType === 'IMAGE' && media.fileUrl ? (
-                      <img src={media.fileUrl} alt={offer?.title || 'Offer media'} className="offer-media-image" />
-                    ) : (
-                      <div className="storefront-placeholder small">
-                        <strong>{media.assetType || 'MEDIA'}</strong>
-                        <p className="muted">{media.mimeType || media.mediaType || '-'}</p>
-                      </div>
-                    )}
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <div className="empty-state">Chua co media.</div>
-            )}
-          </div>
-
-          <div className="evidence-panel">
-            <div className="section-header compact">
-              <div>
-                <h2>Tai lieu xac thuc</h2>
-                <p className="muted">Tai lieu buyer co the mo truc tiep de doi chieu.</p>
-              </div>
-            </div>
-            {offerDocuments.loading ? (
-              <div className="empty-state">Dang tai documents...</div>
-            ) : offerDocuments.error ? (
-              <div className="empty-state error">{offerDocuments.error}</div>
-            ) : documentList.length ? (
-              <div className="evidence-list">
-                {documentList.map((document) => (
-                  <div key={String(document.id || document.fileUrl)} className="evidence-item">
-                    <strong>{document.docType || 'DOCUMENT'}</strong>
-                    <span className="muted">
-                      {document.issuerName || 'Khong ro issuer'} | review {document.reviewStatus || '-'}
-                    </span>
-                    {document.fileUrl ? (
-                      <a className="secondary-button link-button" href={document.fileUrl} target="_blank" rel="noreferrer">
-                        Mo tai lieu
-                      </a>
-                    ) : null}
+              <div className="product-thumbs">
+                {(mediaList.length ? mediaList : [{ id: 'placeholder', assetType: 'IMAGE' }]).slice(0, 4).map((media) => (
+                  <div key={String(media.id || media.fileUrl)} className="product-thumb-small">
+                    {media.fileUrl ? <img src={media.fileUrl} alt={offer?.title || 'Product media'} /> : <span>AF</span>}
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="empty-state">Chua co tai lieu.</div>
-            )}
-          </div>
-        </div>
-      </PageSection>
+            </div>
+
+            <div className="product-info-panel">
+              <button className="text-link" type="button" onClick={() => navigate('/products')}>
+                Quay lại catalog
+              </button>
+              <span className="stock-line">
+                <span />
+                {Number(offer?.availableQuantity ?? 0) > 0 ? 'còn hàng' : 'kiểm tra tồn kho'}
+              </span>
+              <h1>{offer?.title || 'Sản phẩm chưa đặt tên'}</h1>
+              <p>{offer?.description || 'Sản phẩm đang được shop cập nhật mô tả chi tiết.'}</p>
+              <div className="product-rating">★★★★★ <span>Đã xác thực bởi hệ thống AntiFake</span></div>
+              <strong className="product-detail-price">
+                {String(offer?.price ?? '-')} {offer?.currency || 'VND'}
+              </strong>
+              <div className="product-meta-list">
+                <span>Shop: {offer?.shopName || offer?.shopId || '-'}</span>
+                <span>Danh mục: {offer?.categoryName || offer?.categoryId || '-'}</span>
+                <span>Chế độ bán: {String(offer?.salesMode || '-')}</span>
+                <span>Xác thực: {String(offer?.verificationLevel || '-')}</span>
+                {offer?.minWholesaleQty ? <span>Sỉ tối thiểu: {String(offer.minWholesaleQty)}</span> : null}
+              </div>
+
+              <div className="product-purchase-row">
+                <label>
+                  <span>Số lượng</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={quantity}
+                    onChange={(event) => setQuantity(Math.max(1, Number(event.target.value)))}
+                  />
+                </label>
+                <button className="primary-button" type="button" onClick={() => void handleAddToCart()}>
+                  Thêm vào giỏ
+                </button>
+                <Link className="secondary-button link-button" to="/cart">
+                  Xem giỏ hàng
+                </Link>
+              </div>
+              {message ? <div className="empty-state">{message}</div> : null}
+            </div>
+          </section>
+
+          <section className="product-tabs">
+            <div>
+              <h2>Thông tin sản phẩm</h2>
+              <p>{offer?.description || 'Thông tin chi tiết sẽ được shop cập nhật thêm.'}</p>
+            </div>
+            <div>
+              <h2>Tài liệu xác thực</h2>
+              {offerDocuments.loading ? (
+                <p>Đang tải tài liệu...</p>
+              ) : documentList.length ? (
+                <div className="document-list">
+                  {documentList.map((document) => (
+                    <a key={String(document.id || document.fileUrl)} href={document.fileUrl || '#'} target="_blank" rel="noreferrer">
+                      <strong>{document.docType || 'DOCUMENT'}</strong>
+                      <span>{document.issuerName || 'Đơn vị cấp chưa cập nhật'} • {document.reviewStatus || 'pending'}</span>
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <p>Shop chưa bổ sung tài liệu công khai cho offer này.</p>
+              )}
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 }

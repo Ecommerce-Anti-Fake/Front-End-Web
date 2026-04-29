@@ -1,5 +1,7 @@
 import { apiRequest } from './api-client';
 
+export const CART_CHANGED_EVENT = 'cart:changed';
+
 export type CartItem = {
   id: string;
   offerId: string;
@@ -33,6 +35,21 @@ type CartResponseItem = {
   currencySnapshot?: string;
   shopNameSnapshot?: string;
 };
+
+function emitCartChanged() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(CART_CHANGED_EVENT));
+  }
+}
+
+export function onCartChanged(listener: () => void) {
+  if (typeof window === 'undefined') {
+    return () => undefined;
+  }
+
+  window.addEventListener(CART_CHANGED_EVENT, listener);
+  return () => window.removeEventListener(CART_CHANGED_EVENT, listener);
+}
 
 function toNumber(value: unknown) {
   const parsed = Number(value);
@@ -74,7 +91,9 @@ export async function addToCart(input: { offerId: string; quantity: number }) {
     },
   });
 
-  return normalizeCart(response);
+  const cart = normalizeCart(response);
+  emitCartChanged();
+  return cart;
 }
 
 export async function updateCartItemQuantity(cartItemId: string, quantity: number) {
@@ -85,7 +104,9 @@ export async function updateCartItemQuantity(cartItemId: string, quantity: numbe
     },
   });
 
-  return normalizeCart(response);
+  const cart = normalizeCart(response);
+  emitCartChanged();
+  return cart;
 }
 
 export async function removeCartItem(cartItemId: string) {
@@ -93,16 +114,19 @@ export async function removeCartItem(cartItemId: string) {
     method: 'DELETE',
   });
 
-  return normalizeCart(response);
+  const cart = normalizeCart(response);
+  emitCartChanged();
+  return cart;
 }
 
-export async function checkoutCartItem(cartItemId: string, affiliateCode?: string) {
-  return apiRequest(`/orders/cart/items/${cartItemId}/checkout`, {
+export async function checkoutCartItem(
+  cartItemId: string,
+  input?: { affiliateCode?: string; paymentMethod?: 'COD' | 'BANK_TRANSFER' },
+) {
+  const order = await apiRequest(`/orders/cart/items/${cartItemId}/checkout`, {
     method: 'POST',
-    body: affiliateCode
-      ? {
-          affiliateCode,
-        }
-      : undefined,
+    body: input,
   });
+  emitCartChanged();
+  return order;
 }

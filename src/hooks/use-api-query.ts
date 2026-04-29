@@ -16,8 +16,10 @@ export function useApiQuery<T>(path: string, enabled = true): QueryState<T> {
   const [loading, setLoading] = useState(false);
 
   async function load() {
-    if (!enabled || !session?.accessToken) {
+    if (!enabled || !path) {
       setData(null);
+      setError(null);
+      setLoading(false);
       return;
     }
 
@@ -25,7 +27,7 @@ export function useApiQuery<T>(path: string, enabled = true): QueryState<T> {
       setLoading(true);
       setError(null);
       const nextData = await apiRequest<T>(path, {
-        accessToken: session.accessToken,
+        accessToken: session?.accessToken,
       });
       setData(nextData);
     } catch (queryError) {

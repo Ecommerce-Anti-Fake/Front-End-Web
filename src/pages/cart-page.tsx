@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { PageSection } from '../components/page-section';
+import { BreadcrumbNav } from '../components/breadcrumb-nav';
 import {
   CartItem,
+  checkoutCartItem,
   getActiveCart,
   removeCartItem,
   updateCartItemQuantity,
@@ -10,11 +11,34 @@ import {
 
 const ACTIVE_OFFER_KEY = 'eaf-active-offer-id';
 
+type OrderSnapshot = {
+  id?: string;
+  orderStatus?: string;
+  paymentStatus?: string;
+  buyerPayableAmount?: number | string;
+  totalAmount?: number | string;
+  [key: string]: unknown;
+};
+
+type PaymentMethod = 'COD' | 'BANK_TRANSFER';
+
+function summarizeOrder(order: unknown): OrderSnapshot | null {
+  if (!order || typeof order !== 'object') {
+    return null;
+  }
+
+  return order as OrderSnapshot;
+}
+
 export function CartPage() {
   const navigate = useNavigate();
   const [items, setItems] = useState<CartItem[]>([]);
   const [selectedCartItemId, setSelectedCartItemId] = useState('');
+  const [affiliateCode, setAffiliateCode] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('COD');
+  const [checkedOutOrder, setCheckedOutOrder] = useState<OrderSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const selectedItem = useMemo(
@@ -27,24 +51,24 @@ export function CartPage() {
   );
 
   useEffect(() => {
-    async function loadCart() {
-      try {
-        setLoading(true);
-        setMessage(null);
-        const cart = await getActiveCart();
-        setItems(cart.items);
-        setSelectedCartItemId((prev) =>
-          cart.items.some((item) => item.id === prev) ? prev : (cart.items[0]?.id || ''),
-        );
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : 'Load cart failed');
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    void loadCart();
+    void reloadCart();
   }, []);
+
+  async function reloadCart() {
+    try {
+      setLoading(true);
+      setMessage(null);
+      const cart = await getActiveCart();
+      setItems(cart.items);
+      setSelectedCartItemId((prev) =>
+        cart.items.some((item) => item.id === prev) ? prev : (cart.items[0]?.id || ''),
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Tải giỏ hàng thất bại.');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function handleQuantityChange(cartItemId: string, quantity: number) {
     try {
@@ -52,7 +76,7 @@ export function CartPage() {
       const next = await updateCartItemQuantity(cartItemId, quantity);
       setItems(next.items);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Update cart item failed');
+      setMessage(error instanceof Error ? error.message : 'Cập nhật số lượng thất bại.');
     }
   }
 
@@ -61,133 +85,166 @@ export function CartPage() {
       setMessage(null);
       const next = await removeCartItem(cartItemId);
       setItems(next.items);
-
       if (selectedCartItemId === cartItemId) {
         setSelectedCartItemId(next.items[0]?.id || '');
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Remove cart item failed');
+      setMessage(error instanceof Error ? error.message : 'Xóa sản phẩm khỏi giỏ thất bại.');
     }
   }
 
-  function handleCheckoutRetail() {
+  async function handleCheckoutRetail() {
     if (!selectedItem) {
+      setMessage('Vui lòng chọn một sản phẩm để checkout.');
       return;
     }
 
-    window.localStorage.setItem(ACTIVE_OFFER_KEY, selectedItem.offerId);
-    navigate(
-      `/orders?offerId=${encodeURIComponent(selectedItem.offerId)}&quantity=${selectedItem.quantity}&cartItemId=${encodeURIComponent(selectedItem.id)}`,
-    );
+    try {
+      setCheckoutLoading(true);
+      setMessage(null);
+      window.localStorage.setItem(ACTIVE_OFFER_KEY, selectedItem.offerId);
+      const order = await checkoutCartItem(selectedItem.id, {
+        affiliateCode: affiliateCode || undefined,
+        paymentMethod,
+      });
+      const nextOrder = summarizeOrder(order);
+      setCheckedOutOrder(nextOrder);
+      setAffiliateCode('');
+      setMessage('Đã tạo đơn hàng thành công.');
+      await reloadCart();
+      if (nextOrder?.id) {
+        navigate(
+          `/orders/${encodeURIComponent(String(nextOrder.id))}?fromCheckout=1&paymentMethod=${encodeURIComponent(paymentMethod)}`,
+        );
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Checkout thất bại.');
+    } finally {
+      setCheckoutLoading(false);
+    }
   }
 
   return (
-    <div className="page-stack">
-      <header className="page-header">
-        <p className="eyebrow">Cart</p>
-        <h1>Mini cart va checkout draft</h1>
-        <p className="muted">
-          Day la buoc dem giua xem offer va tao order. Cart nay da doc va ghi truc tiep qua backend API.
-        </p>
-      </header>
+    <div className="cart-store-page">
+      <BreadcrumbNav items={[{ label: 'Trang chủ', to: '/' }, { label: 'Giỏ hàng' }]} />
+      <h1>Giỏ hàng</h1>
 
-      <PageSection title="Tong quan gio hang">
-        <div className="context-grid">
-          <div className="context-card">
-            <p className="eyebrow">So item</p>
-            <strong>{items.length}</strong>
-          </div>
-          <div className="context-card">
-            <p className="eyebrow">Tong tam tinh</p>
-            <strong>{cartTotal.toLocaleString('vi-VN')}</strong>
-          </div>
-          <div className="context-card">
-            <p className="eyebrow">Selected checkout item</p>
-            <strong>{selectedItem?.offerTitleSnapshot || 'Chua chon item'}</strong>
-          </div>
-        </div>
-        {message ? <div className="empty-state error">{message}</div> : null}
-      </PageSection>
+      {message ? <div className="empty-state">{message}</div> : null}
 
-      <PageSection title="Cart items">
-        {loading ? (
-          <div className="empty-state">Dang tai gio hang...</div>
-        ) : !items.length ? (
-          <div className="empty-state">
-            Gio hang dang trong. <Link className="link-inline" to="/products">Qua catalog de them offer</Link>.
-          </div>
-        ) : (
-          <div className="entity-grid">
-            {items.map((item) => (
-              <article key={item.id} className={selectedCartItemId === item.id ? 'entity-card active' : 'entity-card'}>
-                <div className="entity-card-header">
-                  <div>
-                    <h3>{item.offerTitleSnapshot}</h3>
-                    <p className="muted">{item.shopNameSnapshot || '-'}</p>
-                  </div>
-                  <button className="secondary-button" type="button" onClick={() => setSelectedCartItemId(item.id)}>
-                    {selectedCartItemId === item.id ? 'Dang chon' : 'Chon checkout'}
+      {loading ? (
+        <div className="empty-state">Đang tải giỏ hàng...</div>
+      ) : !items.length ? (
+        <section className="cart-empty">
+          <h2>Giỏ hàng đang trống</h2>
+          <p>Hãy chọn offer chính hãng trong catalog để bắt đầu đặt hàng.</p>
+          <Link className="primary-button link-button" to="/products">
+            Tiếp tục mua hàng
+          </Link>
+          {checkedOutOrder?.id ? (
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => navigate(`/orders/${encodeURIComponent(String(checkedOutOrder.id))}`)}
+            >
+              Xem đơn vừa tạo
+            </button>
+          ) : null}
+        </section>
+      ) : (
+        <div className="cart-layout">
+          <section className="cart-table">
+            <div className="cart-table-head">
+              <span>Sản phẩm</span>
+              <span>Đơn giá</span>
+              <span>Số lượng</span>
+              <span>Tạm tính</span>
+            </div>
+            {items.map((item) => {
+              const selected = selectedCartItemId === item.id;
+
+              return (
+                <article key={item.id} className={selected ? 'cart-line selected' : 'cart-line'}>
+                  <button className="cart-product" type="button" onClick={() => setSelectedCartItemId(item.id)}>
+                    <span className="cart-product-thumb">AF</span>
+                    <span>
+                      <strong>{item.offerTitleSnapshot}</strong>
+                      <small>{item.shopNameSnapshot || 'Shop đã xác thực'}</small>
+                    </span>
                   </button>
-                </div>
-                <div className="tag-row">
-                  <span className="tag">
-                    Gia: {item.unitPriceSnapshot.toLocaleString('vi-VN')} {item.currencySnapshot}
-                  </span>
-                  <span className="tag">Qty: {item.quantity}</span>
-                  <span className="tag">
-                    Tam tinh: {(item.unitPriceSnapshot * item.quantity).toLocaleString('vi-VN')} {item.currencySnapshot}
-                  </span>
-                </div>
-                <label>
-                  <span>So luong</span>
+                  <strong>
+                    {item.unitPriceSnapshot.toLocaleString('vi-VN')} {item.currencySnapshot}
+                  </strong>
                   <input
                     type="number"
                     min={1}
                     value={item.quantity}
                     onChange={(event) => void handleQuantityChange(item.id, Number(event.target.value))}
                   />
-                </label>
-                <div className="storefront-card-actions">
-                  <Link className="secondary-button link-button" to={`/products/${item.offerId}`}>
-                    Xem lai offer
-                  </Link>
-                  <button className="secondary-button" type="button" onClick={() => void handleRemoveItem(item.id)}>
-                    Xoa item
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </PageSection>
+                  <div className="cart-line-total">
+                    <strong>
+                      {(item.unitPriceSnapshot * item.quantity).toLocaleString('vi-VN')} {item.currencySnapshot}
+                    </strong>
+                    <button type="button" onClick={() => void handleRemoveItem(item.id)}>
+                      Xóa
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </section>
 
-      <PageSection title="Checkout draft">
-        {!selectedItem ? (
-          <div className="empty-state">Chon mot item trong gio hang de checkout.</div>
-        ) : (
-          <div className="offer-summary-panel">
-            <span className="eyebrow">Retail checkout</span>
-            <h2>{selectedItem.offerTitleSnapshot}</h2>
-            <p className="muted">
-              Offer {selectedItem.offerId} | Shop {selectedItem.shopNameSnapshot}
-            </p>
-            <div className="tag-row">
-              <span className="tag">
-                Gia: {selectedItem.unitPriceSnapshot.toLocaleString('vi-VN')} {selectedItem.currencySnapshot}
-              </span>
-              <span className="tag">So luong: {selectedItem.quantity}</span>
-              <span className="tag">
-                Tong: {(selectedItem.unitPriceSnapshot * selectedItem.quantity).toLocaleString('vi-VN')} {selectedItem.currencySnapshot}
-              </span>
+          <aside className="cart-summary">
+            <h2>Tổng giỏ hàng</h2>
+            <div>
+              <span>Tạm tính</span>
+              <strong>{cartTotal.toLocaleString('vi-VN')} VND</strong>
             </div>
-            <div className="offer-actions">
-              <button className="primary-button" type="button" onClick={handleCheckoutRetail}>
-                Checkout retail
-              </button>
+            <div>
+              <span>Sản phẩm đã chọn</span>
+              <strong>{selectedItem?.offerTitleSnapshot || 'Chưa chọn'}</strong>
             </div>
-          </div>
-        )}
-      </PageSection>
+            <label>
+              <span>Mã affiliate</span>
+              <input
+                value={affiliateCode}
+                onChange={(event) => setAffiliateCode(event.target.value)}
+                placeholder="Nếu có mã affiliate"
+              />
+            </label>
+            <div className="payment-method-panel">
+              <span>Hình thức thanh toán</span>
+              <div className="payment-method-options">
+                <button
+                  className={paymentMethod === 'COD' ? 'payment-method-option active' : 'payment-method-option'}
+                  type="button"
+                  onClick={() => setPaymentMethod('COD')}
+                >
+                  <strong>COD</strong>
+                  <small>Giao hàng rồi thu tiền trực tiếp.</small>
+                </button>
+                <button
+                  className={paymentMethod === 'BANK_TRANSFER' ? 'payment-method-option active' : 'payment-method-option'}
+                  type="button"
+                  onClick={() => setPaymentMethod('BANK_TRANSFER')}
+                >
+                  <strong>Chuyển khoản</strong>
+                  <small>Checkout trước, sau đó xác nhận chuyển khoản ở trang đơn hàng.</small>
+                </button>
+              </div>
+            </div>
+            <div>
+              <span>Ghi chú thanh toán</span>
+              <strong>{paymentMethod === 'COD' ? 'Bạn sẽ xác nhận đã thu tiền khi giao hàng.' : 'Bạn sẽ đánh dấu đã thanh toán sau khi chuyển khoản.'}</strong>
+            </div>
+            <button className="primary-button" type="button" disabled={checkoutLoading} onClick={() => void handleCheckoutRetail()}>
+              {checkoutLoading ? 'Đang xử lý...' : 'Tạo đơn hàng'}
+            </button>
+            <Link className="secondary-button link-button" to="/products">
+              Tiếp tục mua hàng
+            </Link>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

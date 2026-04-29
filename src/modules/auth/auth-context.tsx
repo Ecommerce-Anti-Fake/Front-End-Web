@@ -19,7 +19,7 @@ import {
 type AuthContextValue = {
   session: AuthSession;
   isAuthenticated: boolean;
-  login: (identifier: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<LoginResponse>;
   register: (payload: RegisterPayload) => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -55,6 +55,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           },
         });
         setSession(response);
+        return response;
       },
       async register(payload) {
         await apiRequest('/auth/register', {

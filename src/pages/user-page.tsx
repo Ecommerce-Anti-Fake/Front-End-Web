@@ -1,7 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { ApiResult } from '../components/api-result';
-import { KeyValueList } from '../components/key-value-list';
-import { PageSection } from '../components/page-section';
+import { Link } from 'react-router-dom';
+import { BreadcrumbNav } from '../components/breadcrumb-nav';
 import { useApiQuery } from '../hooks/use-api-query';
 import { apiRequest } from '../lib/api-client';
 import { useAuth } from '../modules/auth/auth-context';
@@ -13,13 +12,10 @@ type ProfileRecord = {
   displayName?: string | null;
   role?: string;
   accountStatus?: string;
-  createdAt?: string;
-  updatedAt?: string;
   [key: string]: unknown;
 };
 
 type ProfileCompletionRecord = {
-  userId?: string;
   missingProfileFields?: string[];
   isOrderReady?: boolean;
   [key: string]: unknown;
@@ -34,17 +30,38 @@ type KycDocumentRecord = {
 };
 
 type KycRecord = {
-  id?: string;
   fullName?: string;
   dateOfBirth?: string;
   idType?: string;
-  kycLevel?: string;
   verificationStatus?: string;
   reviewNote?: string | null;
-  verifiedAt?: string | null;
   documents?: KycDocumentRecord[];
   [key: string]: unknown;
 };
+
+type KycUploadSignature = {
+  cloudName: string;
+  apiKey: string;
+  timestamp: number;
+  folder: string;
+  publicId: string;
+  uploadResourceType: 'image';
+  signature: string;
+};
+
+type CloudinaryUploadResponse = {
+  secure_url?: string;
+  url?: string;
+  public_id?: string;
+};
+
+const accountMenu = [
+  { label: 'Thông tin tài khoản', to: '/user' },
+  { label: 'Đơn hàng của tôi', to: '/orders' },
+  { label: 'Cửa hàng của tôi', to: '/shops' },
+  { label: 'Affiliate', to: '/affiliate' },
+  { label: 'Giỏ hàng', to: '/cart' },
+];
 
 const initialProfileForm = {
   displayName: '',
@@ -58,12 +75,6 @@ const initialKycForm = {
   phone: '',
   idType: 'CCCD',
   idNumber: '',
-  frontMimeType: 'image/jpeg',
-  frontFileUrl: '',
-  frontPublicId: '',
-  backMimeType: 'image/jpeg',
-  backFileUrl: '',
-  backPublicId: '',
 };
 
 export function UserPage() {
@@ -76,7 +87,11 @@ export function UserPage() {
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [kycForm, setKycForm] = useState(initialKycForm);
   const [kycMessage, setKycMessage] = useState<string | null>(null);
-  const [signatureResult, setSignatureResult] = useState<unknown>(null);
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+  const [kycUploading, setKycUploading] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [editingKyc, setEditingKyc] = useState(false);
 
   const profileData = profile.data;
   const completionData = completion.data;
@@ -85,6 +100,7 @@ export function UserPage() {
     () => (Array.isArray(completionData?.missingProfileFields) ? completionData.missingProfileFields : []),
     [completionData],
   );
+  const kycStatus = String(kycData?.verificationStatus || 'Chưa nộp');
 
   useEffect(() => {
     setProfileForm((prev) => ({
@@ -111,7 +127,7 @@ export function UserPage() {
     setProfileMessage(null);
 
     if (!profileData?.id) {
-      setProfileMessage('Khong tim thay user id de cap nhat profile.');
+      setProfileMessage('Không tìm thấy ID người dùng để cập nhật hồ sơ.');
       return;
     }
 
@@ -126,38 +142,74 @@ export function UserPage() {
         },
       });
 
-      setProfileMessage('Cap nhat profile thanh cong.');
+      setProfileMessage('Cập nhật hồ sơ thành công.');
+      setEditingProfile(false);
       await Promise.all([profile.reload(), completion.reload()]);
     } catch (error) {
-      setProfileMessage(error instanceof Error ? error.message : 'Update profile failed');
+      setProfileMessage(error instanceof Error ? error.message : 'Cập nhật hồ sơ thất bại.');
     }
   }
 
-  async function handleGetKycSignatures(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setKycMessage(null);
+  async function uploadKycImage(file: File, signature: KycUploadSignature) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('api_key', signature.apiKey);
+    formData.append('timestamp', String(signature.timestamp));
+    formData.append('folder', signature.folder);
+    formData.append('public_id', signature.publicId);
+    formData.append('signature', signature.signature);
 
-    try {
-      const response = await apiRequest('/user/kyc/document-upload-signatures', {
+    const response = await fetch(
+      `https://api.cloudinary.com/v1_1/${signature.cloudName}/${signature.uploadResourceType}/upload`,
+      {
         method: 'POST',
-        accessToken: session?.accessToken,
-        body: {
-          items: [{ side: 'FRONT' }, { side: 'BACK' }],
-        },
-      });
+        body: formData,
+      },
+    );
 
-      setSignatureResult(response);
-      setKycMessage('Lay KYC upload signatures thanh cong.');
-    } catch (error) {
-      setKycMessage(error instanceof Error ? error.message : 'Get KYC signatures failed');
+    const payload = (await response.json()) as CloudinaryUploadResponse & { error?: { message?: string } };
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message || 'Upload ảnh KYC thất bại.');
     }
+
+    return {
+      fileUrl: String(payload.secure_url || payload.url || ''),
+      publicId: String(payload.public_id || signature.publicId),
+    };
   }
 
   async function handleSubmitKyc(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setKycMessage(null);
 
+    if (!frontFile || !backFile) {
+      setKycMessage('Vui lòng chọn ảnh mặt trước và mặt sau của Căn cước công dân.');
+      return;
+    }
+
     try {
+      setKycUploading(true);
+      const signatures = await apiRequest<KycUploadSignature[]>('/user/kyc/document-upload-signatures', {
+        method: 'POST',
+        accessToken: session?.accessToken,
+        body: {
+          items: [{ side: 'FRONT' }, { side: 'BACK' }],
+        },
+      });
+      const frontSignature = signatures[0];
+      const backSignature = signatures[1];
+
+      if (!frontSignature || !backSignature) {
+        throw new Error('Backend chưa trả đủ chữ ký upload cho 2 mặt CCCD.');
+      }
+
+      setKycMessage('Đang tải ảnh CCCD lên hệ thống lưu trữ...');
+      const [frontUpload, backUpload] = await Promise.all([
+        uploadKycImage(frontFile, frontSignature),
+        uploadKycImage(backFile, backSignature),
+      ]);
+
       await apiRequest('/user/kyc', {
         method: 'POST',
         accessToken: session?.accessToken,
@@ -171,200 +223,243 @@ export function UserPage() {
             {
               side: 'FRONT',
               assetType: 'IMAGE',
-              mimeType: kycForm.frontMimeType,
-              fileUrl: kycForm.frontFileUrl,
-              publicId: kycForm.frontPublicId,
+              mimeType: frontFile.type || 'image/jpeg',
+              fileUrl: frontUpload.fileUrl,
+              publicId: frontUpload.publicId,
             },
             {
               side: 'BACK',
               assetType: 'IMAGE',
-              mimeType: kycForm.backMimeType,
-              fileUrl: kycForm.backFileUrl,
-              publicId: kycForm.backPublicId,
+              mimeType: backFile.type || 'image/jpeg',
+              fileUrl: backUpload.fileUrl,
+              publicId: backUpload.publicId,
             },
           ],
         },
       });
 
-      setKycMessage('Gui KYC thanh cong.');
+      setKycMessage('Gửi KYC thành công. Hồ sơ đang chờ duyệt.');
+      setFrontFile(null);
+      setBackFile(null);
+      setEditingKyc(false);
       await Promise.all([kyc.reload(), completion.reload(), profile.reload()]);
     } catch (error) {
-      setKycMessage(error instanceof Error ? error.message : 'Submit KYC failed');
+      setKycMessage(error instanceof Error ? error.message : 'Gửi KYC thất bại.');
+    } finally {
+      setKycUploading(false);
     }
   }
 
   return (
-    <div className="page-stack">
-      <header className="page-header">
-        <p className="eyebrow">User</p>
-        <h1>Profile va KYC</h1>
-        <p className="muted">
-          Day la luong user co the thao tac duoc: bo sung profile, xin upload signature va nop ho so KYC.
-        </p>
-      </header>
+    <div className="account-page">
+      <BreadcrumbNav items={[{ label: 'Trang chủ', to: '/' }, { label: 'Tài khoản của tôi' }]} />
+      <h1>Quản lí tài khoản</h1>
 
-      <PageSection title="Tom tat nguoi dung">
-        <KeyValueList
-          items={[
-            { label: 'Display name', value: profileData?.displayName || '-' },
-            { label: 'Email', value: profileData?.email || '-' },
-            { label: 'Phone', value: profileData?.phone || '-' },
-            { label: 'Role', value: profileData?.role || session?.user.role || '-' },
-            { label: 'Account status', value: profileData?.accountStatus || '-' },
-            { label: 'Order ready', value: completionData?.isOrderReady ? 'Yes' : 'No' },
-            { label: 'Missing fields', value: missingFields.length ? missingFields.join(', ') : 'Khong co' },
-            { label: 'KYC status', value: kycData?.verificationStatus || 'Chua nop' },
-          ]}
-        />
-      </PageSection>
+      <div className="account-layout">
+        <aside className="account-sidebar">
+          <h3>Tài khoản</h3>
+          {accountMenu.map((item, index) => (
+            <Link key={`${item.to}-${index}`} to={item.to} className={index === 0 ? 'active' : ''}>
+              {item.label}
+            </Link>
+          ))}
+          <div className="sidebar-group">
+            <strong>Sản phẩm so sánh</strong>
+            <span>Bạn chưa có sản phẩm so sánh.</span>
+          </div>
+          <div className="sidebar-group">
+            <strong>Yêu thích</strong>
+            <span>Bạn chưa có sản phẩm yêu thích.</span>
+          </div>
+        </aside>
 
-      <PageSection title="Cap nhat profile" description="Hoan thien so dien thoai va ten hien thi de di tiep cac flow mua hang.">
-        <form className="panel-form two-columns" onSubmit={handleUpdateProfile}>
-          <label>
-            <span>Display name</span>
-            <input
-              value={profileForm.displayName}
-              onChange={(event) => setProfileForm((prev) => ({ ...prev, displayName: event.target.value }))}
-            />
-          </label>
-          <label>
-            <span>Phone</span>
-            <input
-              value={profileForm.phone}
-              onChange={(event) => setProfileForm((prev) => ({ ...prev, phone: event.target.value }))}
-            />
-          </label>
-          <label className="full-width">
-            <span>Email</span>
-            <input
-              value={profileForm.email}
-              onChange={(event) => setProfileForm((prev) => ({ ...prev, email: event.target.value }))}
-            />
-          </label>
-          {profileMessage ? <div className="empty-state full-width">{profileMessage}</div> : null}
-          <button className="primary-button full-width" type="submit">
-            Cap nhat profile
-          </button>
-        </form>
-      </PageSection>
+        <main className="account-main">
+          <section className="account-panel">
+            <div className="account-panel-header">
+              <h2>Thông tin tài khoản</h2>
+              <span>{profileData?.accountStatus || 'active'}</span>
+            </div>
 
-      <PageSection
-        title="KYC"
-        description="Buoc 1 lay upload signature cho mat truoc va mat sau CCCD. Buoc 2 upload len storage. Buoc 3 quay lai day dan file URL va public ID de nop KYC."
-      >
-        <form className="panel-form" onSubmit={handleGetKycSignatures}>
-          <button className="secondary-button" type="submit">
-            Lay KYC upload signatures
-          </button>
-        </form>
+            <div className="account-info-grid">
+              <div>
+                <h4>Thông tin liên hệ</h4>
+                <p>{profileData?.displayName || 'Chưa cập nhật tên'}</p>
+                <p>{profileData?.email || profileData?.phone || '-'}</p>
+                <button type="button" className="text-link" onClick={() => setEditingProfile(true)}>
+                  Chỉnh sửa
+                </button>
+              </div>
+              <div>
+                <h4>Bản tin</h4>
+                <p>Bạn đang nhận thông tin sản phẩm chính hãng và cảnh báo hàng giả.</p>
+                <button type="button" className="text-link">
+                  Chỉnh sửa
+                </button>
+              </div>
+            </div>
 
-        {kycMessage ? <div className="empty-state">{kycMessage}</div> : null}
-        {signatureResult ? (
-          <ApiResult title="KYC upload signatures" loading={false} error={null} data={signatureResult} />
-        ) : null}
+            {editingProfile ? (
+              <form className="panel-form two-columns slim-form account-edit-form" onSubmit={handleUpdateProfile}>
+                <label>
+                  <span>Tên hiển thị</span>
+                  <input
+                    value={profileForm.displayName}
+                    onChange={(event) => setProfileForm((prev) => ({ ...prev, displayName: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  <span>Số điện thoại</span>
+                  <input
+                    value={profileForm.phone}
+                    onChange={(event) => setProfileForm((prev) => ({ ...prev, phone: event.target.value }))}
+                  />
+                </label>
+                <label className="full-width">
+                  <span>Email</span>
+                  <input
+                    value={profileForm.email}
+                    onChange={(event) => setProfileForm((prev) => ({ ...prev, email: event.target.value }))}
+                  />
+                </label>
+                {profileMessage ? <div className="empty-state full-width">{profileMessage}</div> : null}
+                <div className="form-actions full-width">
+                  <button className="primary-button" type="submit">
+                    Lưu thay đổi
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => setEditingProfile(false)}>
+                    Hủy
+                  </button>
+                </div>
+              </form>
+            ) : profileMessage ? (
+              <div className="empty-state">{profileMessage}</div>
+            ) : null}
+          </section>
 
-        <form className="panel-form two-columns" onSubmit={handleSubmitKyc}>
-          <label>
-            <span>Full name</span>
-            <input
-              value={kycForm.fullName}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, fullName: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            <span>Date of birth</span>
-            <input
-              type="date"
-              value={kycForm.dateOfBirth}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, dateOfBirth: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            <span>Phone</span>
-            <input
-              value={kycForm.phone}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, phone: event.target.value }))}
-            />
-          </label>
-          <label>
-            <span>ID type</span>
-            <input
-              value={kycForm.idType}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, idType: event.target.value }))}
-              required
-            />
-          </label>
-          <label className="full-width">
-            <span>ID number</span>
-            <input
-              value={kycForm.idNumber}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, idNumber: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            <span>Front mime type</span>
-            <input
-              value={kycForm.frontMimeType}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, frontMimeType: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            <span>Back mime type</span>
-            <input
-              value={kycForm.backMimeType}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, backMimeType: event.target.value }))}
-              required
-            />
-          </label>
-          <label className="full-width">
-            <span>Front file URL</span>
-            <input
-              value={kycForm.frontFileUrl}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, frontFileUrl: event.target.value }))}
-              required
-            />
-          </label>
-          <label className="full-width">
-            <span>Front public ID</span>
-            <input
-              value={kycForm.frontPublicId}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, frontPublicId: event.target.value }))}
-              required
-            />
-          </label>
-          <label className="full-width">
-            <span>Back file URL</span>
-            <input
-              value={kycForm.backFileUrl}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, backFileUrl: event.target.value }))}
-              required
-            />
-          </label>
-          <label className="full-width">
-            <span>Back public ID</span>
-            <input
-              value={kycForm.backPublicId}
-              onChange={(event) => setKycForm((prev) => ({ ...prev, backPublicId: event.target.value }))}
-              required
-            />
-          </label>
-          <button className="primary-button full-width" type="submit">
-            Gui KYC
-          </button>
-        </form>
-      </PageSection>
+          <section className="account-panel">
+            <div className="account-panel-header">
+              <h2>Tóm tắt xác minh</h2>
+              <span>{completionData?.isOrderReady ? 'Sẵn sàng đặt hàng' : 'Cần bổ sung'}</span>
+            </div>
+            <div className="account-info-grid">
+              <div>
+                <h4>Hồ sơ cá nhân</h4>
+                <p>Vai trò: {profileData?.role || session?.user.role || '-'}</p>
+                <p>Thông tin còn thiếu: {missingFields.length ? missingFields.join(', ') : 'Không có'}</p>
+              </div>
+              <div>
+                <h4>KYC</h4>
+                <p>Trạng thái: {kycStatus}</p>
+                <p>{kycData?.reviewNote || 'Upload ảnh CCCD mặt trước và mặt sau để xác minh.'}</p>
+                <button type="button" className="text-link" onClick={() => setEditingKyc((value) => !value)}>
+                  {editingKyc ? 'Đóng form KYC' : 'Nộp / cập nhật KYC'}
+                </button>
+              </div>
+            </div>
 
-      <PageSection title="Current profile">
-        <ApiResult title="Profile" loading={profile.loading} error={profile.error} data={profile.data} />
-      </PageSection>
+            {editingKyc ? (
+              <form className="panel-form two-columns slim-form account-edit-form" onSubmit={handleSubmitKyc}>
+                <label>
+                  <span>Họ và tên</span>
+                  <input
+                    value={kycForm.fullName}
+                    onChange={(event) => setKycForm((prev) => ({ ...prev, fullName: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Ngày sinh</span>
+                  <input
+                    type="date"
+                    value={kycForm.dateOfBirth}
+                    onChange={(event) => setKycForm((prev) => ({ ...prev, dateOfBirth: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Số điện thoại</span>
+                  <input
+                    value={kycForm.phone}
+                    onChange={(event) => setKycForm((prev) => ({ ...prev, phone: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  <span>Loại giấy tờ</span>
+                  <input
+                    value={kycForm.idType}
+                    onChange={(event) => setKycForm((prev) => ({ ...prev, idType: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label className="full-width">
+                  <span>Số CCCD</span>
+                  <input
+                    value={kycForm.idNumber}
+                    onChange={(event) => setKycForm((prev) => ({ ...prev, idNumber: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Ảnh mặt trước CCCD</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) => setFrontFile(event.target.files?.[0] ?? null)}
+                    required
+                  />
+                  {frontFile ? <small className="muted">Đã chọn: {frontFile.name}</small> : null}
+                </label>
+                <label>
+                  <span>Ảnh mặt sau CCCD</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) => setBackFile(event.target.files?.[0] ?? null)}
+                    required
+                  />
+                  {backFile ? <small className="muted">Đã chọn: {backFile.name}</small> : null}
+                </label>
+                {kycMessage ? <div className="empty-state full-width">{kycMessage}</div> : null}
+                <div className="form-actions full-width">
+                  <button className="primary-button" type="submit" disabled={kycUploading}>
+                    {kycUploading ? 'Đang gửi KYC...' : 'Gửi KYC'}
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => setEditingKyc(false)}>
+                    Hủy
+                  </button>
+                </div>
+              </form>
+            ) : kycMessage ? (
+              <div className="empty-state">{kycMessage}</div>
+            ) : null}
+          </section>
 
-      <PageSection title="Current KYC">
-        <ApiResult title="KYC" loading={kyc.loading} error={kyc.error} data={kyc.data} />
-      </PageSection>
+          <section className="account-panel">
+            <div className="account-panel-header">
+              <h2>Sổ địa chỉ</h2>
+              <button type="button" className="text-link">
+                Quản lý địa chỉ
+              </button>
+            </div>
+            <div className="account-info-grid">
+              <div>
+                <h4>Địa chỉ thanh toán mặc định</h4>
+                <p>Bạn chưa thiết lập địa chỉ thanh toán mặc định.</p>
+                <button type="button" className="text-link">
+                  Sửa địa chỉ
+                </button>
+              </div>
+              <div>
+                <h4>Địa chỉ giao hàng mặc định</h4>
+                <p>Bạn chưa thiết lập địa chỉ giao hàng mặc định.</p>
+                <button type="button" className="text-link">
+                  Sửa địa chỉ
+                </button>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
     </div>
   );
 }

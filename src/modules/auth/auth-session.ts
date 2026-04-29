@@ -12,6 +12,7 @@ let refreshTimeoutId: number | null = null;
 const listeners = new Set<SessionListener>();
 
 function readStoredSession(): AuthSession {
+  window.sessionStorage.removeItem(SESSION_KEY);
   const raw = window.localStorage.getItem(SESSION_KEY);
 
   if (!raw) {
@@ -85,6 +86,7 @@ function persistSession(session: AuthSession) {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   } else {
     window.localStorage.removeItem(SESSION_KEY);
+    window.sessionStorage.removeItem(SESSION_KEY);
   }
 
   scheduleRefresh(session);

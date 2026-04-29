@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { API_BASE_URL } from '../lib/api-client';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { BreadcrumbNav } from '../components/breadcrumb-nav';
 import { useAuth } from '../modules/auth/auth-context';
 
 export function AuthPage() {
@@ -20,8 +20,10 @@ export function AuthPage() {
     setError(null);
 
     try {
+      let loginResponse: Awaited<ReturnType<typeof login>> | null = null;
+
       if (mode === 'login') {
-        await login(identifier, password);
+        loginResponse = await login(identifier, password);
       } else {
         await register({
           email: identifier.includes('@') ? identifier : undefined,
@@ -29,76 +31,106 @@ export function AuthPage() {
           displayName,
           password,
         });
-        await login(identifier, password);
+        loginResponse = await login(identifier, password);
       }
 
-      const nextPath = (location.state as { nextPath?: string } | null)?.nextPath || '/';
+      const explicitNextPath = (location.state as { nextPath?: string } | null)?.nextPath;
+      const isAdmin = String(loginResponse?.user.role || '').toLowerCase() === 'admin';
+      const nextPath = explicitNextPath || (isAdmin ? '/admin' : '/');
       navigate(nextPath, { replace: true });
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Auth request failed');
+      setError(submitError instanceof Error ? submitError.message : 'Xác thực thất bại.');
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="auth-layout">
-      <section className="auth-hero">
-        <p className="eyebrow">Responsive web app</p>
-        <h1>Van hanh san TMDT chong hang gia tren mot giao dien duy nhat</h1>
-        <p className="muted">
-          Repo nay duoc dung de thao tac nhanh voi gateway hien tai tai <code>{API_BASE_URL}</code>.
-        </p>
-      </section>
-
-      <section className="auth-card">
-        <div className="mode-switch">
-          <button
-            className={mode === 'login' ? 'pill active' : 'pill'}
-            onClick={() => setMode('login')}
-            type="button"
-          >
-            Dang nhap
-          </button>
-          <button
-            className={mode === 'register' ? 'pill active' : 'pill'}
-            onClick={() => setMode('register')}
-            type="button"
-          >
-            Dang ky
-          </button>
+    <div className="auth-exclusive-page">
+      <header className="auth-exclusive-header">
+        <div className="top-strip">
+          <div className="site-container top-strip-inner">
+            <span>Ưu đãi cho người dùng mới và shop đã xác thực</span>
+            <Link to="/products">Mua ngay</Link>
+            <span>Tiếng Việt</span>
+          </div>
         </div>
+        <div className="site-container auth-nav-row">
+          <Link className="auth-logo" to="/">
+            AntiFake
+          </Link>
+          <nav>
+            <Link to="/">Trang chủ</Link>
+            <Link to="/products">Sản phẩm</Link>
+            <Link to="/shops">Mở shop</Link>
+            <button type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+              {mode === 'login' ? 'Đăng ký' : 'Đăng nhập'}
+            </button>
+          </nav>
+        </div>
+      </header>
 
-        <form className="panel-form" onSubmit={handleSubmit}>
-          {mode === 'register' ? (
-            <label>
-              <span>Ten hien thi</span>
-              <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-            </label>
-          ) : null}
+      <main className="auth-exclusive-main">
+        <section className="auth-art-panel" aria-hidden="true">
+          <div className="auth-cart-visual">
+            <span />
+            <strong>AF</strong>
+          </div>
+        </section>
 
-          <label>
-            <span>Email hoac so dien thoai</span>
-            <input value={identifier} onChange={(e) => setIdentifier(e.target.value)} required />
-          </label>
-
-          <label>
-            <span>Mat khau</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
+        <section className="auth-form-panel">
+          <div>
+            <BreadcrumbNav
+              items={[
+                { label: 'Trang chủ', to: '/' },
+                { label: mode === 'login' ? 'Đăng nhập' : 'Đăng ký' },
+              ]}
             />
-          </label>
+            <h1>{mode === 'login' ? 'Đăng nhập AntiFake' : 'Tạo tài khoản AntiFake'}</h1>
+            <p>{mode === 'login' ? 'Nhập thông tin để tiếp tục.' : 'Tạo tài khoản để mua hàng, mở shop và làm affiliate.'}</p>
+          </div>
 
-          {error ? <div className="empty-state error">{error}</div> : null}
+          <form className="auth-line-form" onSubmit={handleSubmit}>
+            {mode === 'register' ? (
+              <label>
+                <span>Họ và tên</span>
+                <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
+              </label>
+            ) : null}
 
-          <button className="primary-button" type="submit" disabled={submitting}>
-            {submitting ? 'Dang xu ly...' : mode === 'login' ? 'Dang nhap' : 'Tao tai khoan'}
+            <label>
+              <span>Email hoặc số điện thoại</span>
+              <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} required />
+            </label>
+
+            <label>
+              <span>Mật khẩu</span>
+              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+            </label>
+
+            {error ? <div className="empty-state error">{error}</div> : null}
+
+            <div className="auth-submit-row">
+              <button className="primary-button" type="submit" disabled={submitting}>
+                {submitting ? 'Đang xử lý...' : mode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'}
+              </button>
+              {mode === 'login' ? (
+                <button className="text-link" type="button">
+                  Quên mật khẩu?
+                </button>
+              ) : null}
+            </div>
+          </form>
+
+          <button className="auth-switch-link" type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+            {mode === 'login' ? 'Chưa có tài khoản? Đăng ký' : 'Đã có tài khoản? Đăng nhập'}
           </button>
-        </form>
-      </section>
+        </section>
+      </main>
+
+      <footer className="auth-exclusive-footer">
+        <div className="site-container footer-bottom">Copyright © 2026 AntiFake Market. All rights reserved.</div>
+      </footer>
     </div>
   );
 }
