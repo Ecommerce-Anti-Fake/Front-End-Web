@@ -962,11 +962,38 @@ pre {
 .catalog-toolbar input,
 .catalog-toolbar select,
 .cart-summary input,
+.cart-summary textarea,
 .cart-line input {
   min-height: 42px;
   border: 1px solid var(--line-strong);
   padding: 0 12px;
   background: #ffffff;
+}
+
+.cart-summary textarea {
+  min-height: 92px;
+  padding: 12px;
+  resize: vertical;
+}
+
+.checkout-address-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  padding: 14px;
+  background: #fafafa;
+}
+
+.checkout-address-card strong,
+.checkout-address-card small,
+.checkout-address-card span {
+  display: block;
+}
+
+.checkout-address-card small {
+  margin-top: 5px;
+  color: var(--text-dim);
+  line-height: 1.5;
 }
 
 .catalog-layout {
@@ -4412,6 +4439,30 @@ pre {
   border-bottom: 0;
 }
 
+.order-shipping-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  border-left: 3px solid var(--accent);
+  padding: 14px 16px;
+  background: #fafafa;
+}
+
+.order-shipping-box strong,
+.order-shipping-box span,
+.order-shipping-box p {
+  display: block;
+}
+
+.order-shipping-box span {
+  color: var(--text-dim);
+}
+
+.order-shipping-box p {
+  margin: 4px 0 0;
+  line-height: 1.6;
+}
+
 .order-stepper {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4645,6 +4696,99 @@ pre {
   line-height: 1.5;
 }
 
+.seller-order-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.seller-order-detail {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--line);
+  padding: 18px;
+  background: #ffffff;
+}
+
+.seller-order-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+}
+
+.seller-order-detail-head span {
+  color: var(--accent);
+  font-size: 0.86rem;
+}
+
+.seller-order-detail-head h3 {
+  margin: 6px 0 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.seller-order-detail-head > strong {
+  color: var(--accent);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.shop-stat-grid.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.seller-order-shipping,
+.seller-order-items {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  padding: 14px;
+  background: #fafafa;
+}
+
+.seller-order-shipping span,
+.seller-order-shipping p,
+.seller-order-items small {
+  color: var(--text-dim);
+}
+
+.seller-order-shipping p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.seller-order-items > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.seller-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.danger-button {
+  min-height: 42px;
+  border: 1px solid rgba(219, 68, 68, 0.32);
+  padding: 0 18px;
+  color: var(--accent);
+  background: #fff5f5;
+  font-weight: 600;
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .order-detail-grid,
 .order-action-grid {
   display: grid;
@@ -4748,6 +4892,7 @@ pre {
   .shop-hero-panel,
   .shop-onboarding-layout,
   .shop-dashboard-layout,
+  .seller-order-layout,
   .shop-stat-grid,
   .shop-category-status-grid {
     grid-template-columns: 1fr;

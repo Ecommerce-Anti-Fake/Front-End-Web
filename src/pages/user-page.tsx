@@ -10,6 +10,7 @@ type ProfileRecord = {
   email?: string | null;
   phone?: string | null;
   displayName?: string | null;
+  address?: string | null;
   role?: string;
   accountStatus?: string;
   [key: string]: unknown;
@@ -67,6 +68,7 @@ const initialProfileForm = {
   displayName: '',
   phone: '',
   email: '',
+  address: '',
 };
 
 const initialKycForm = {
@@ -108,6 +110,7 @@ export function UserPage() {
       displayName: prev.displayName || String(profileData?.displayName || ''),
       phone: prev.phone || String(profileData?.phone || ''),
       email: prev.email || String(profileData?.email || ''),
+      address: prev.address || String(profileData?.address || ''),
     }));
   }, [profileData]);
 
@@ -139,6 +142,7 @@ export function UserPage() {
           displayName: profileForm.displayName || undefined,
           phone: profileForm.phone || undefined,
           email: profileForm.email || undefined,
+          address: profileForm.address || undefined,
         },
       });
 
@@ -285,6 +289,12 @@ export function UserPage() {
                 <h4>Thông tin liên hệ</h4>
                 <p>{profileData?.displayName || 'Chưa cập nhật tên'}</p>
                 <p>{profileData?.email || profileData?.phone || '-'}</p>
+                <p>
+                  Địa chỉ:{' '}
+                  {profileData?.address
+                    ? `${profileData.address} (${profileData.phone || 'chưa có SĐT'})`
+                    : 'Chưa có'}
+                </p>
                 <button type="button" className="text-link" onClick={() => setEditingProfile(true)}>
                   Chỉnh sửa
                 </button>
@@ -319,6 +329,14 @@ export function UserPage() {
                   <input
                     value={profileForm.email}
                     onChange={(event) => setProfileForm((prev) => ({ ...prev, email: event.target.value }))}
+                  />
+                </label>
+                <label className="full-width">
+                  <span>Địa chỉ</span>
+                  <input
+                    value={profileForm.address}
+                    onChange={(event) => setProfileForm((prev) => ({ ...prev, address: event.target.value }))}
+                    placeholder="Số nhà, đường, phường/xã, quận/huyện, tỉnh/thành"
                   />
                 </label>
                 {profileMessage ? <div className="empty-state full-width">{profileMessage}</div> : null}

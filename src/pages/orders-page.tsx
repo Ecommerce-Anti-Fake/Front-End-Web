@@ -25,6 +25,9 @@ type OrderRecord = {
   buyerPayableAmount?: number | string;
   sellerReceivableAmount?: number | string;
   totalAmount?: number | string;
+  shippingName?: string | null;
+  shippingPhone?: string | null;
+  shippingAddress?: string | null;
   items?: OrderItemRecord[];
   createdAt?: string;
   updatedAt?: string;
@@ -356,6 +359,19 @@ export function OrdersPage() {
                     <span>Trạng thái thanh toán</span>
                     <strong>{statusLabel(selectedOrder.paymentStatus)}</strong>
                   </article>
+                </div>
+              </section>
+
+              <section className="order-detail-card">
+                <div className="order-section-title">
+                  <h2>Thông tin giao hàng</h2>
+                  <span>Địa chỉ nhận hàng</span>
+                </div>
+
+                <div className="order-shipping-box">
+                  <strong>{selectedOrder.shippingName || 'Người nhận chưa cập nhật'}</strong>
+                  <span>{selectedOrder.shippingPhone || 'Chưa có số điện thoại'}</span>
+                  <p>{selectedOrder.shippingAddress || 'Chưa có địa chỉ giao hàng'}</p>
                 </div>
               </section>
 

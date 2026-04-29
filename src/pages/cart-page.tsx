@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { BreadcrumbNav } from '../components/breadcrumb-nav';
+import { useApiQuery } from '../hooks/use-api-query';
 import {
   CartItem,
   checkoutCartItem,
@@ -22,6 +23,18 @@ type OrderSnapshot = {
 
 type PaymentMethod = 'COD' | 'BANK_TRANSFER';
 
+type ProfileRecord = {
+  displayName?: string | null;
+  phone?: string | null;
+  address?: string | null;
+};
+
+type ShippingForm = {
+  recipientName: string;
+  phone: string;
+  address: string;
+};
+
 function summarizeOrder(order: unknown): OrderSnapshot | null {
   if (!order || typeof order !== 'object') {
     return null;
@@ -32,10 +45,17 @@ function summarizeOrder(order: unknown): OrderSnapshot | null {
 
 export function CartPage() {
   const navigate = useNavigate();
+  const profile = useApiQuery<ProfileRecord>('/user/userprofile');
   const [items, setItems] = useState<CartItem[]>([]);
   const [selectedCartItemId, setSelectedCartItemId] = useState('');
   const [affiliateCode, setAffiliateCode] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('COD');
+  const [shippingForm, setShippingForm] = useState<ShippingForm>({
+    recipientName: '',
+    phone: '',
+    address: '',
+  });
+  const [shippingTouched, setShippingTouched] = useState(false);
   const [checkedOutOrder, setCheckedOutOrder] = useState<OrderSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -49,10 +69,25 @@ export function CartPage() {
     () => items.reduce((sum, item) => sum + item.unitPriceSnapshot * item.quantity, 0),
     [items],
   );
+  const hasProfileShipping = Boolean(
+    profile.data?.address?.trim() || profile.data?.phone?.trim() || profile.data?.displayName?.trim(),
+  );
 
   useEffect(() => {
     void reloadCart();
   }, []);
+
+  useEffect(() => {
+    if (!profile.data || shippingTouched) {
+      return;
+    }
+
+    setShippingForm({
+      recipientName: profile.data.displayName || '',
+      phone: profile.data.phone || '',
+      address: profile.data.address || '',
+    });
+  }, [profile.data, shippingTouched]);
 
   async function reloadCart() {
     try {
@@ -68,6 +103,11 @@ export function CartPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function updateShippingField(field: keyof ShippingForm, value: string) {
+    setShippingTouched(true);
+    setShippingForm((prev) => ({ ...prev, [field]: value }));
   }
 
   async function handleQuantityChange(cartItemId: string, quantity: number) {
@@ -95,7 +135,20 @@ export function CartPage() {
 
   async function handleCheckoutRetail() {
     if (!selectedItem) {
-      setMessage('Vui lòng chọn một sản phẩm để checkout.');
+      setMessage('Vui lòng chọn một sản phẩm để tạo đơn.');
+      return;
+    }
+
+    const shippingPhone = shippingForm.phone.trim();
+    const shippingAddress = shippingForm.address.trim();
+
+    if (!shippingPhone) {
+      setMessage('Vui lòng nhập số điện thoại liên hệ để giao hàng.');
+      return;
+    }
+
+    if (!shippingAddress) {
+      setMessage('Vui lòng nhập địa chỉ giao hàng.');
       return;
     }
 
@@ -106,6 +159,9 @@ export function CartPage() {
       const order = await checkoutCartItem(selectedItem.id, {
         affiliateCode: affiliateCode || undefined,
         paymentMethod,
+        shippingName: shippingForm.recipientName.trim() || undefined,
+        shippingPhone,
+        shippingAddress,
       });
       const nextOrder = summarizeOrder(order);
       setCheckedOutOrder(nextOrder);
@@ -203,6 +259,44 @@ export function CartPage() {
               <span>Sản phẩm đã chọn</span>
               <strong>{selectedItem?.offerTitleSnapshot || 'Chưa chọn'}</strong>
             </div>
+
+            <section className="checkout-address-card">
+              <div>
+                <strong>Địa chỉ giao hàng</strong>
+                <small>
+                  {hasProfileShipping
+                    ? 'Đã điền từ địa chỉ mặc định trong hồ sơ. Bạn có thể sửa cho đơn này.'
+                    : 'Nhập địa chỉ nhận hàng trước khi tạo đơn.'}
+                </small>
+              </div>
+              <label>
+                <span>Người nhận</span>
+                <input
+                  value={shippingForm.recipientName}
+                  onChange={(event) => updateShippingField('recipientName', event.target.value)}
+                  placeholder="Tên người nhận"
+                />
+              </label>
+              <label>
+                <span>Số điện thoại liên hệ *</span>
+                <input
+                  value={shippingForm.phone}
+                  onChange={(event) => updateShippingField('phone', event.target.value)}
+                  placeholder="Ví dụ: 0987654321"
+                  required
+                />
+              </label>
+              <label>
+                <span>Địa chỉ giao hàng *</span>
+                <textarea
+                  value={shippingForm.address}
+                  onChange={(event) => updateShippingField('address', event.target.value)}
+                  placeholder="Số nhà, đường, phường/xã, quận/huyện, tỉnh/thành"
+                  required
+                />
+              </label>
+            </section>
+
             <label>
               <span>Mã affiliate</span>
               <input
@@ -231,10 +325,6 @@ export function CartPage() {
                   <small>Checkout trước, sau đó xác nhận chuyển khoản ở trang đơn hàng.</small>
                 </button>
               </div>
-            </div>
-            <div>
-              <span>Ghi chú thanh toán</span>
-              <strong>{paymentMethod === 'COD' ? 'Bạn sẽ xác nhận đã thu tiền khi giao hàng.' : 'Bạn sẽ đánh dấu đã thanh toán sau khi chuyển khoản.'}</strong>
             </div>
             <button className="primary-button" type="button" disabled={checkoutLoading} onClick={() => void handleCheckoutRetail()}>
               {checkoutLoading ? 'Đang xử lý...' : 'Tạo đơn hàng'}

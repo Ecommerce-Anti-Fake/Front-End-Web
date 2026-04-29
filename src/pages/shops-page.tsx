@@ -209,6 +209,29 @@ type BrandAuthorizationRecord = {
   [key: string]: unknown;
 };
 
+type ShopOrderRecord = {
+  id?: string;
+  orderStatus?: string;
+  fulfillmentStatus?: string;
+  paymentStatus?: string | null;
+  paymentMethod?: string | null;
+  sellerShopName?: string;
+  buyerUserId?: string | null;
+  buyerShopId?: string | null;
+  shippingName?: string | null;
+  shippingPhone?: string | null;
+  shippingAddress?: string | null;
+  buyerPayableAmount?: number | string;
+  totalAmount?: number | string;
+  createdAt?: string;
+  items?: Array<{
+    offerTitleSnapshot?: string;
+    unitPrice?: number | string;
+    quantity?: number | string;
+  }>;
+  [key: string]: unknown;
+};
+
 function normalizeItems<T>(data: unknown, keys: string[]): T[] {
   if (Array.isArray(data)) {
     return data as T[];
@@ -243,6 +266,56 @@ function statusLabel(status?: string) {
   }
 
   return status || 'Chưa có';
+}
+
+function fulfillmentLabel(status?: string) {
+  switch (status) {
+    case 'PROCESSING':
+      return 'Đang xử lý';
+    case 'SHIPPING':
+      return 'Đang giao';
+    case 'DELIVERED':
+      return 'Đã giao';
+    case 'CANCELLED':
+      return 'Đã hủy giao';
+    case 'PENDING':
+      return 'Chờ xử lý';
+    default:
+      return status || 'Chờ xử lý';
+  }
+}
+
+function paymentMethodLabel(value?: string | null) {
+  if (value === 'COD') {
+    return 'Thanh toán khi nhận hàng';
+  }
+  if (value === 'BANK_TRANSFER') {
+    return 'Chuyển khoản';
+  }
+  return value || 'Chưa chọn';
+}
+
+function formatMoney(value: unknown) {
+  const numberValue = Number(value || 0);
+  return new Intl.NumberFormat('vi-VN', {
+    style: 'currency',
+    currency: 'VND',
+    maximumFractionDigits: 0,
+  }).format(Number.isFinite(numberValue) ? numberValue : 0);
+}
+
+function formatDateTime(value?: string) {
+  if (!value) {
+    return '-';
+  }
+
+  return new Intl.DateTimeFormat('vi-VN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(new Date(value));
 }
 
 function registrationLabel(value?: string) {
@@ -345,6 +418,9 @@ export function ShopsPage() {
   });
   const [brandAuthorizationMessage, setBrandAuthorizationMessage] = useState<string | null>(null);
   const [brandSignatureResult, setBrandSignatureResult] = useState<UploadSignatureRecord[] | null>(null);
+  const [selectedSellerOrderId, setSelectedSellerOrderId] = useState('');
+  const [sellerOrderMessage, setSellerOrderMessage] = useState<string | null>(null);
+  const [sellerOrderUpdating, setSellerOrderUpdating] = useState(false);
 
   const shopList = useMemo(() => normalizeItems<ShopRecord>(myShops.data, ['items', 'data', 'shops']), [myShops.data]);
   const categoryList = useMemo(
@@ -418,6 +494,10 @@ export function ShopsPage() {
     effectiveShopId ? `/shops/${encodeURIComponent(effectiveShopId)}/brand-authorizations` : '',
     Boolean(effectiveShopId),
   );
+  const sellerOrders = useApiQuery<ShopOrderRecord[]>(
+    effectiveShopId ? `/orders/seller/shops/${encodeURIComponent(effectiveShopId)}` : '',
+    Boolean(effectiveShopId),
+  );
   const shopDocumentList = useMemo(
     () => normalizeItems<ShopDocumentRecord>(shopDocuments.data, ['items', 'data', 'documents']),
     [shopDocuments.data],
@@ -456,6 +536,23 @@ export function ShopsPage() {
         (authorization) => String(authorization.verificationStatus || '').toLowerCase() === 'approved',
       ).length,
     [brandAuthorizationList],
+  );
+  const sellerOrderList = useMemo(
+    () => normalizeItems<ShopOrderRecord>(sellerOrders.data, ['items', 'data', 'orders']),
+    [sellerOrders.data],
+  );
+  const selectedSellerOrder = useMemo(
+    () => sellerOrderList.find((order) => String(order.id || '') === selectedSellerOrderId) ?? sellerOrderList[0] ?? null,
+    [sellerOrderList, selectedSellerOrderId],
+  );
+  const sellerOrderStats = useMemo(
+    () => ({
+      pending: sellerOrderList.filter((order) => String(order.orderStatus || '').toLowerCase() === 'pending').length,
+      shipping: sellerOrderList.filter((order) => order.fulfillmentStatus === 'SHIPPING').length,
+      completed: sellerOrderList.filter((order) => String(order.orderStatus || '').toLowerCase() === 'completed').length,
+      revenue: sellerOrderList.reduce((total, order) => total + Number(order.buyerPayableAmount || order.totalAmount || 0), 0),
+    }),
+    [sellerOrderList],
   );
 
   useEffect(() => {
@@ -518,6 +615,17 @@ export function ShopsPage() {
       }));
     }
   }, [activeShop?.registrationType]);
+
+  useEffect(() => {
+    if (!sellerOrderList.length) {
+      setSelectedSellerOrderId('');
+      return;
+    }
+
+    setSelectedSellerOrderId((prev) =>
+      sellerOrderList.some((order) => String(order.id || '') === prev) ? prev : String(sellerOrderList[0]?.id || ''),
+    );
+  }, [sellerOrderList]);
 
   useEffect(() => {
     const requirements = shopDocumentRequirements.data?.requirements ?? [];
@@ -899,6 +1007,27 @@ export function ShopsPage() {
     }
   }
 
+  async function handleUpdateSellerOrder(orderId: string, fulfillmentStatus: 'PROCESSING' | 'SHIPPING' | 'DELIVERED' | 'CANCELLED') {
+    setSellerOrderUpdating(true);
+    setSellerOrderMessage(null);
+
+    try {
+      await apiRequest(`/orders/${encodeURIComponent(orderId)}/fulfillment`, {
+        method: 'POST',
+        accessToken: session?.accessToken,
+        body: {
+          fulfillmentStatus,
+        },
+      });
+      setSellerOrderMessage('Cập nhật trạng thái đơn thành công.');
+      await sellerOrders.reload();
+    } catch (error) {
+      setSellerOrderMessage(error instanceof Error ? error.message : 'Cập nhật đơn thất bại.');
+    } finally {
+      setSellerOrderUpdating(false);
+    }
+  }
+
   return (
     <div className="shop-page">
       <BreadcrumbNav
@@ -1038,6 +1167,7 @@ export function ShopsPage() {
               <small>{registrationLabel(activeShop.registrationType)}</small>
             </div>
             <a href="#tong-quan">Tổng quan</a>
+            <a href="#don-ban">Đơn bán</a>
             <a href="#xac-minh">Xác minh</a>
             <a href="#ho-so-shop">Hồ sơ shop</a>
             <a href="#ho-so-danh-muc">Hồ sơ danh mục</a>
@@ -1062,6 +1192,134 @@ export function ShopsPage() {
                 <Metric label="Mã số thuế" value={activeShop.taxCode || 'Chưa cập nhật'} />
                 <Metric label="Shop ID" value={String(activeShop.id || '-')} />
               </div>
+            </section>
+
+            <section id="don-ban" className="shop-card">
+              <div className="shop-card-header">
+                <div>
+                  <h2>Đơn bán của shop</h2>
+                  <p>Theo dõi đơn mới, địa chỉ giao hàng và cập nhật trạng thái xử lý/giao hàng.</p>
+                </div>
+                <button className="secondary-button" type="button" onClick={() => void sellerOrders.reload()}>
+                  Tải lại
+                </button>
+              </div>
+
+              <div className="shop-stat-grid">
+                <Metric label="Đơn chờ xử lý" value={String(sellerOrderStats.pending)} />
+                <Metric label="Đang giao" value={String(sellerOrderStats.shipping)} />
+                <Metric label="Đã hoàn tất" value={String(sellerOrderStats.completed)} />
+                <Metric label="Tổng giá trị" value={formatMoney(sellerOrderStats.revenue)} />
+              </div>
+
+              {sellerOrders.loading ? (
+                <div className="empty-state">Đang tải đơn bán...</div>
+              ) : sellerOrders.error ? (
+                <div className="empty-state error">{sellerOrders.error}</div>
+              ) : !sellerOrderList.length ? (
+                <div className="empty-state">Shop chưa có đơn bán nào.</div>
+              ) : (
+                <div className="seller-order-layout">
+                  <div className="order-list-panel">
+                    {sellerOrderList.map((order) => {
+                      const isActive = String(order.id || '') === String(selectedSellerOrder?.id || '');
+                      const firstItem = order.items?.[0];
+
+                      return (
+                        <button
+                          key={String(order.id)}
+                          type="button"
+                          className={isActive ? 'order-list-card active' : 'order-list-card'}
+                          onClick={() => setSelectedSellerOrderId(String(order.id || ''))}
+                        >
+                          <div>
+                            <strong>#{String(order.id || '').slice(0, 8)}</strong>
+                            <span>{fulfillmentLabel(order.fulfillmentStatus)}</span>
+                          </div>
+                          <p>{firstItem?.offerTitleSnapshot || 'Đơn hàng'}</p>
+                          <small>{formatDateTime(order.createdAt)}</small>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {selectedSellerOrder ? (
+                    <article className="seller-order-detail">
+                      <div className="seller-order-detail-head">
+                        <div>
+                          <span>Chi tiết đơn</span>
+                          <h3>Đơn #{String(selectedSellerOrder.id || '').slice(0, 12)}</h3>
+                        </div>
+                        <strong>{statusLabel(selectedSellerOrder.orderStatus)}</strong>
+                      </div>
+
+                      <div className="shop-stat-grid compact">
+                        <Metric label="Xử lý" value={fulfillmentLabel(selectedSellerOrder.fulfillmentStatus)} />
+                        <Metric label="Thanh toán" value={statusLabel(selectedSellerOrder.paymentStatus || undefined)} />
+                        <Metric label="Phương thức" value={paymentMethodLabel(selectedSellerOrder.paymentMethod)} />
+                        <Metric label="Khách cần trả" value={formatMoney(selectedSellerOrder.buyerPayableAmount || selectedSellerOrder.totalAmount)} />
+                      </div>
+
+                      <div className="seller-order-shipping">
+                        <strong>Thông tin giao hàng</strong>
+                        <span>{selectedSellerOrder.shippingName || 'Chưa có tên người nhận'}</span>
+                        <span>{selectedSellerOrder.shippingPhone || 'Chưa có số điện thoại'}</span>
+                        <p>{selectedSellerOrder.shippingAddress || 'Chưa có địa chỉ giao hàng'}</p>
+                      </div>
+
+                      <div className="seller-order-items">
+                        <strong>Sản phẩm</strong>
+                        {(selectedSellerOrder.items ?? []).map((item, itemIndex) => (
+                          <div key={`${String(selectedSellerOrder.id)}-${itemIndex}`}>
+                            <span>{item.offerTitleSnapshot || 'Sản phẩm'}</span>
+                            <small>
+                              {formatMoney(item.unitPrice)} x {String(item.quantity || 0)}
+                            </small>
+                          </div>
+                        ))}
+                      </div>
+
+                      {sellerOrderMessage ? <div className="empty-state wide">{sellerOrderMessage}</div> : null}
+                      <div className="seller-order-actions">
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          disabled={sellerOrderUpdating}
+                          onClick={() => void handleUpdateSellerOrder(String(selectedSellerOrder.id), 'PROCESSING')}
+                        >
+                          Đang xử lý
+                        </button>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          disabled={sellerOrderUpdating}
+                          onClick={() => void handleUpdateSellerOrder(String(selectedSellerOrder.id), 'SHIPPING')}
+                        >
+                          Đang giao
+                        </button>
+                        <button
+                          className="primary-button"
+                          type="button"
+                          disabled={sellerOrderUpdating}
+                          onClick={() => void handleUpdateSellerOrder(String(selectedSellerOrder.id), 'DELIVERED')}
+                        >
+                          Đã giao / COD đã thu tiền
+                        </button>
+                        {String(selectedSellerOrder.orderStatus || '').toLowerCase() === 'pending' ? (
+                          <button
+                            className="danger-button"
+                            type="button"
+                            disabled={sellerOrderUpdating}
+                            onClick={() => void handleUpdateSellerOrder(String(selectedSellerOrder.id), 'CANCELLED')}
+                          >
+                            Hủy đơn
+                          </button>
+                        ) : null}
+                      </div>
+                    </article>
+                  ) : null}
+                </div>
+              )}
             </section>
 
             <section id="xac-minh" className="shop-card">

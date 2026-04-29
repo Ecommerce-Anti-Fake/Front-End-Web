@@ -121,7 +121,13 @@ export async function removeCartItem(cartItemId: string) {
 
 export async function checkoutCartItem(
   cartItemId: string,
-  input?: { affiliateCode?: string; paymentMethod?: 'COD' | 'BANK_TRANSFER' },
+  input?: {
+    affiliateCode?: string;
+    paymentMethod?: 'COD' | 'BANK_TRANSFER';
+    shippingName?: string;
+    shippingPhone?: string;
+    shippingAddress?: string;
+  },
 ) {
   const order = await apiRequest(`/orders/cart/items/${cartItemId}/checkout`, {
     method: 'POST',
